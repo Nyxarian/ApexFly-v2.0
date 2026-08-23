@@ -1,0 +1,105 @@
+/**
+ * @file blackbox.h
+ * @brief 飞机端黑匣子：PID 双备份、解锁后场次日志、串口按场次导出 CSV。
+ *
+ * 只有本模块的任务碰 SPI3 / W25Q64。电机任务只 SubmitSample，电台任务只 RequestSave。
+ * 不搬老 app_blackbox，不写水平零点，不实现六面校准。
+ * 日志按 Session 切开，每场开头钉死当时 26 项 PID；时间先用相对毫秒，UTC 占位 0。
+ * 写满日志区就停记，避免盖掉还没导出的开头。
+ * USART3：dump [N] 只出校验通过的新场次 CSV；dumpall [N] 原样打日志区 64 字节十六进制（含老数据）。N=0 或 ALL 表示全部。
+ */
+
+#ifndef BLACKBOX_H
+#define BLACKBOX_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * @brief 一拍控制样本。电机任务在 100Hz 环里填，黑匣子任务写入 Flash。
+ */
+typedef struct
+{
+    /* 本场开始后的相对时间，单位毫秒。 */
+    uint32_t t_ms;
+    /* 机体系横滚，减过水平零点，单位百分之一度。 */
+    int16_t roll_cdeg;
+    /* 机体系俯仰，减过水平零点，单位百分之一度。 */
+    int16_t pitch_cdeg;
+    /* 机体系偏航，单位百分之一度。 */
+    int16_t yaw_cdeg;
+    /* 机体系横滚角速度，单位百分之一度每秒。 */
+    int16_t roll_rate_cdps;
+    /* 机体系俯仰角速度，单位百分之一度每秒。 */
+    int16_t pitch_rate_cdps;
+    /* 机体系偏航角速度，单位百分之一度每秒。 */
+    int16_t yaw_rate_cdps;
+    /* 横滚混控修正，单位微秒。 */
+    int16_t roll_corr_us;
+    /* 俯仰混控修正，单位微秒。 */
+    int16_t pitch_corr_us;
+    /* 偏航混控修正，单位微秒。 */
+    int16_t yaw_corr_us;
+    /* 基础油门，单位微秒。 */
+    uint16_t throttle_us;
+    /* 四路电机脉宽，单位微秒。 */
+    uint16_t motor_us[4];
+    /* 0 上锁，1 解锁。 */
+    uint8_t armed;
+    /* 0 失联，1 链路通。 */
+    uint8_t connected;
+} BlackboxSample_t;
+
+/**
+ * @brief 黑匣子任务入口。初始化 W25Q64，上电加载 PID，之后处理保存、记录和 dump。
+ * @param argument 未使用。
+ */
+void Blackbox_Task(void *argument);
+
+/**
+ * @brief Flash 已识别并完成上电加载后为 true。
+ */
+bool Blackbox_IsReady(void);
+
+/**
+ * @brief 当前正在记一场解锁日志。
+ */
+bool Blackbox_IsRecording(void);
+
+/**
+ * @brief 把当前 RAM PID 排队写入双备份槽。电台任务调用，本函数不擦 Flash。
+ * @return 已入队返回 true；未就绪或上一次还在写返回 false。
+ */
+bool Blackbox_RequestSave(void);
+
+/**
+ * @brief 从双备份槽读出合法表并灌进 RAM PID。上锁时由电台任务调用。
+ * @return 至少一槽合法并已应用返回 true。
+ */
+bool Blackbox_LoadSavedParameters(void);
+
+/**
+ * @brief 电机任务在解锁边沿调用，开一场并写入带整张 PID 的场次头。
+ */
+void Blackbox_NotifyArmed(void);
+
+/**
+ * @brief 电机任务在上锁或失联边沿调用，结束当前场次。
+ */
+void Blackbox_NotifyDisarmed(void);
+
+/**
+ * @brief 把一拍样本丢进队列。队列满则丢弃并计数，不阻塞电机环。
+ * @param sample 已经填好的控制样本。
+ */
+void Blackbox_SubmitSample(const BlackboxSample_t *sample);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

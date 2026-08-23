@@ -1,0 +1,208 @@
+/**
+ * @file apex_protocol.h
+ * @brief 遥控器与飞机端共用的二进制控制/遥测协议。
+ *
+ * 两端必须使用同一份文件。当前版本 0x06，与 CoreFly F2 Remoto 一致。
+ * 帧中多字节数据均为小端，不直接发送 C 结构体，避免对齐差异。
+ * 本文件只做编解码，不读写 LoRa，也不写电机。
+ * 飞机 v2 尚未接入的遥测字段填 0。
+ * 六面校准操作码仍占 5/6/7，飞机回 INVALID_OPERATION，不再实现校准。
+ */
+
+#ifndef APEX_PROTOCOL_H
+#define APEX_PROTOCOL_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define APEX_PROTOCOL_HEADER_0 0xA5U
+#define APEX_PROTOCOL_HEADER_1 0x5AU
+#define APEX_PROTOCOL_VERSION 0x06U
+#define APEX_PROTOCOL_MAX_PAYLOAD_LENGTH 112U
+#define APEX_PROTOCOL_MAX_FRAME_LENGTH (9U + APEX_PROTOCOL_MAX_PAYLOAD_LENGTH)
+#define APEX_PROTOCOL_CONTROL_PAYLOAD_LENGTH 10U
+#define APEX_PROTOCOL_TELEMETRY_PAYLOAD_LENGTH 31U
+#define APEX_PROTOCOL_PID_COMMAND_PAYLOAD_LENGTH 6U
+#define APEX_PID_LEGACY_PARAMETER_COUNT 15U
+#define APEX_PID_V5_PARAMETER_COUNT 21U
+#define APEX_PID_PARAMETER_COUNT 26U
+#define APEX_PROTOCOL_PID_RESPONSE_PAYLOAD_LENGTH (4U + (APEX_PID_PARAMETER_COUNT * 4U))
+#define APEX_PID_VALUE_SCALE 10000L
+
+/* PID 回包包含序号、状态、操作类型、参数版本及全部 26 个参数；负载上限不足时必须在编译期报错，避免遥控器永久等待确认。 */
+#if (APEX_PROTOCOL_PID_RESPONSE_PAYLOAD_LENGTH > APEX_PROTOCOL_MAX_PAYLOAD_LENGTH)
+#error "APEX_PROTOCOL_MAX_PAYLOAD_LENGTH is too small for the PID response."
+#endif
+
+/* 遥控器请求保持解锁的控制标志。 */
+#define APEX_CONTROL_FLAG_ARM_REQUESTED 0x01U
+
+/* 飞机返回给遥控器的状态标志。 */
+#define APEX_TELEMETRY_FLAG_ARMED 0x01U
+#define APEX_TELEMETRY_FLAG_GPS_FIX 0x02U
+#define APEX_TELEMETRY_FLAG_HOME_VALID 0x04U
+#define APEX_TELEMETRY_FLAG_BLACKBOX_RECORDING 0x08U
+#define APEX_TELEMETRY_FLAG_IMU_READY 0x10U
+
+/* 飞机端四路电机PWM已经完成初始化，可以接受控制指令。 */
+#define APEX_TELEMETRY_FLAG_MOTOR_READY 0x20U
+
+/* 飞机端已从 GPS RMC 语句取得有效 UTC 日期时间，遥控器可据此显示北京时间。 */
+#define APEX_TELEMETRY_FLAG_GPS_TIME_VALID 0x40U
+
+typedef enum
+{
+    APEX_MESSAGE_CONTROL = 0x01,
+    APEX_MESSAGE_PING = 0x10,
+    APEX_MESSAGE_PID_COMMAND = 0x20,
+    APEX_MESSAGE_TELEMETRY = 0x81,
+    APEX_MESSAGE_PONG = 0x90,
+    APEX_MESSAGE_PID_RESPONSE = 0xA0
+} ApexMessageType_t;
+
+typedef enum
+{
+    APEX_PID_OPERATION_GET = 0,
+    APEX_PID_OPERATION_SET,
+    APEX_PID_OPERATION_SAVE,
+    APEX_PID_OPERATION_LOAD_SAVED,
+    APEX_PID_OPERATION_LOAD_DEFAULTS,
+    /* 旧六面校准操作码，飞机不再实现，收到后回 INVALID_OPERATION。 */
+    APEX_PID_OPERATION_ACCEL_CAL_SAMPLE = 5,
+    APEX_PID_OPERATION_ACCEL_CAL_FINISH = 6,
+    APEX_PID_OPERATION_ACCEL_CAL_CANCEL = 7
+} ApexPidOperation_t;
+
+typedef enum
+{
+    APEX_PID_STATUS_OK = 0,
+    APEX_PID_STATUS_INVALID_OPERATION,
+    APEX_PID_STATUS_INVALID_PARAMETER,
+    APEX_PID_STATUS_OUT_OF_RANGE,
+    APEX_PID_STATUS_LOCKED_REQUIRED,
+    APEX_PID_STATUS_STORAGE_NOT_READY,
+    APEX_PID_STATUS_STORAGE_ERROR
+} ApexPidStatus_t;
+
+typedef enum
+{
+    APEX_PID_ROLL_OUTER_KP = 0,
+    APEX_PID_ROLL_OUTER_KI,
+    APEX_PID_ROLL_OUTER_KD,
+    APEX_PID_ROLL_INNER_KP,
+    APEX_PID_ROLL_INNER_KI,
+    APEX_PID_ROLL_INNER_KD,
+    APEX_PID_PITCH_OUTER_KP,
+    APEX_PID_PITCH_OUTER_KI,
+    APEX_PID_PITCH_OUTER_KD,
+    APEX_PID_PITCH_INNER_KP,
+    APEX_PID_PITCH_INNER_KI,
+    APEX_PID_PITCH_INNER_KD,
+    APEX_PID_YAW_RATE_KP,
+    APEX_PID_YAW_RATE_KI,
+    APEX_PID_YAW_RATE_KD,
+    APEX_PID_ROLL_MAX_RATE_DPS,
+    APEX_PID_ROLL_MAX_CORRECTION_US,
+    APEX_PID_PITCH_MAX_RATE_DPS,
+    APEX_PID_PITCH_MAX_CORRECTION_US,
+    APEX_PID_YAW_MAX_RATE_DPS,
+    APEX_PID_YAW_MAX_CORRECTION_US,
+    /* 悬停姿态 Trim 只改变摇杆回中时的目标角，不参与陀螺仪零偏校准。 */
+    APEX_PID_ROLL_TRIM_DEG,
+    APEX_PID_PITCH_TRIM_DEG,
+    /* Yaw航向角度环PID参数（GPS定点模式使用） */
+    APEX_PID_YAW_ANGLE_KP,
+    APEX_PID_YAW_ANGLE_KI,
+    APEX_PID_YAW_ANGLE_KD
+} ApexPidParameterId_t;
+
+typedef enum
+{
+    APEX_PROTOCOL_OK = 0,
+    APEX_PROTOCOL_INVALID_PARAM,
+    APEX_PROTOCOL_BUFFER_TOO_SMALL,
+    APEX_PROTOCOL_BAD_HEADER,
+    APEX_PROTOCOL_BAD_VERSION,
+    APEX_PROTOCOL_BAD_LENGTH,
+    APEX_PROTOCOL_BAD_CRC,
+    APEX_PROTOCOL_BAD_MESSAGE_TYPE
+} ApexProtocolStatus_t;
+
+/* 遥控器每100 ms发送一次的控制负载。量程：油门0~1000，姿态/偏航-1000~1000。 */
+typedef struct
+{
+    uint16_t sequence;
+    uint16_t throttle;
+    int16_t roll;
+    int16_t pitch;
+    int16_t yaw;
+    uint8_t flags;
+    uint8_t flight_mode;
+} ApexControlCommand_t;
+
+/* 飞机回传的遥测负载。当前电机通信阶段未接入的传感器字段填0。 */
+typedef struct
+{
+    uint16_t sequence;
+    int16_t roll_cdeg;
+    int16_t pitch_cdeg;
+    int16_t yaw_cdeg;
+    int32_t altitude_cm;
+    int16_t vertical_speed_cms;
+    uint16_t ground_speed_cms;
+    uint16_t battery_mv;
+    uint16_t home_distance_m;
+    int16_t rssi_dbm;
+    int8_t snr_q4;
+    uint8_t satellites;
+    uint8_t link_quality;
+    uint8_t flags;
+    uint8_t flight_mode;
+    uint16_t throttle_pwm_us;
+    uint32_t gps_utc_seconds;
+} ApexTelemetry_t;
+
+typedef struct
+{
+    uint16_t sequence;
+    ApexPidOperation_t operation;
+    uint8_t parameter_id;
+    int32_t value_q10000;
+} ApexPidCommand_t;
+
+typedef struct
+{
+    uint16_t sequence;
+    ApexPidStatus_t status;
+    ApexPidOperation_t operation;
+    uint16_t parameter_version;
+    int32_t values_q10000[APEX_PID_PARAMETER_COUNT];
+} ApexPidResponse_t;
+
+typedef struct
+{
+    ApexMessageType_t message_type;
+    uint16_t sequence;
+    uint8_t payload_length;
+    uint8_t payload[APEX_PROTOCOL_MAX_PAYLOAD_LENGTH];
+} ApexFrame_t;
+
+uint16_t ApexProtocol_Crc16(const uint8_t *data, uint16_t length);
+ApexProtocolStatus_t ApexProtocol_EncodeControl(const ApexControlCommand_t *command, uint8_t *frame, uint8_t capacity, uint8_t *frame_length);
+ApexProtocolStatus_t ApexProtocol_EncodeTelemetry(const ApexTelemetry_t *telemetry, uint8_t *frame, uint8_t capacity, uint8_t *frame_length);
+ApexProtocolStatus_t ApexProtocol_EncodePidCommand(const ApexPidCommand_t *command, uint8_t *frame, uint8_t capacity, uint8_t *frame_length);
+ApexProtocolStatus_t ApexProtocol_EncodePidResponse(const ApexPidResponse_t *response, uint8_t *frame, uint8_t capacity, uint8_t *frame_length);
+ApexProtocolStatus_t ApexProtocol_DecodeFrame(const uint8_t *frame, uint8_t frame_length, ApexFrame_t *decoded_frame);
+ApexProtocolStatus_t ApexProtocol_DecodeControl(const ApexFrame_t *frame, ApexControlCommand_t *command);
+ApexProtocolStatus_t ApexProtocol_DecodeTelemetry(const ApexFrame_t *frame, ApexTelemetry_t *telemetry);
+ApexProtocolStatus_t ApexProtocol_DecodePidCommand(const ApexFrame_t *frame, ApexPidCommand_t *command);
+ApexProtocolStatus_t ApexProtocol_DecodePidResponse(const ApexFrame_t *frame, ApexPidResponse_t *response);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

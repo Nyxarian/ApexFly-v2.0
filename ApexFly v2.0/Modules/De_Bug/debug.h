@@ -1,0 +1,89 @@
+/**
+ * @file debug.h
+ * @brief 调试串口输出接口。
+ *
+ * 本模块使用 USART3（PC10 发送，PC11 接收，波特率 115200），与老工程一致。
+ * USART2 留给 GPS，不要用来输出日志或波形。
+ *
+ * VOFA+ 使用方法：
+ * - 查看文本日志：调用 Debug_Printf()，协议选择 FireWater
+ * - 查看波形：调用 Debug_VofaJustFloat() 或 Debug_VofaImu6Axis()，协议选择 JustFloat
+ * 同一时刻不要把文本日志和 JustFloat 二进制数据混在同一条串口数据流里。
+ */
+
+#ifndef DEBUG_H
+#define DEBUG_H
+
+#include "main.h"
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Debug_Printf() 单次格式化缓冲区长度，超出部分会被截断。 */
+#define DEBUG_PRINTF_BUFFER_SIZE 256U
+
+/* VOFA+ 单帧最多发送的浮点通道数量。 */
+#define DEBUG_VOFA_MAX_CHANNELS  12U
+
+/**
+ * @brief 创建调试串口互斥锁。
+ *
+ * 调度器启动前、启动后都可以调用。
+ * 各个发送接口第一次使用时也会自动完成初始化。
+ */
+void Debug_Init(void);
+
+/**
+ * @brief 通过 USART3 发送一段原始字节。
+ * @param data 待发送数据。
+ * @param length 字节数。
+ * @return 成功返回 HAL_OK；参数无效返回 HAL_ERROR；未拿到互斥锁返回 HAL_BUSY。
+ */
+HAL_StatusTypeDef Debug_Send(const uint8_t *data, uint16_t length);
+
+/**
+ * @brief 格式化文本日志并发送，用法与 printf 相同。
+ *
+ * 建议以回车换行结尾。VOFA+ 选择 FireWater 协议即可看到这些字符串。
+ * @return 实际发送的字符数；失败返回 -1。
+ */
+int Debug_Printf(const char *format, ...);
+
+/**
+ * @brief 按 VOFA+ 的 JustFloat 协议发送一组浮点通道。
+ *
+ * 帧格式：若干个小端浮点数，再附加 4 字节帧尾 00 00 80 7F。
+ * VOFA+ 协议请选择 JustFloat。
+ * @param channels 通道数组。
+ * @param channel_count 通道数量，范围 1 到 DEBUG_VOFA_MAX_CHANNELS。
+ */
+HAL_StatusTypeDef Debug_VofaJustFloat(const float *channels, uint8_t channel_count);
+
+/**
+ * @brief 按 VOFA+ 的 FireWater 文本协议发送一组浮点通道。
+ *
+ * 帧格式：逗号分隔的浮点文本，以回车换行结束，例如 "0.12,0.34,1.00"。
+ * VOFA+ 协议请选择 FireWater。适合同时查看波形和少量文本。
+ */
+HAL_StatusTypeDef Debug_VofaFireWater(const float *channels, uint8_t channel_count);
+
+/**
+ * @brief 把 MPU6050 六轴物理量发送到 VOFA+ 的 JustFloat 波形。
+ *
+ * 通道顺序固定为：
+ * 第 0 路：X 轴加速度，单位 g
+ * 第 1 路：Y 轴加速度，单位 g
+ * 第 2 路：Z 轴加速度，单位 g
+ * 第 3 路：X 轴角速度，单位 度每秒
+ * 第 4 路：Y 轴角速度，单位 度每秒
+ * 第 5 路：Z 轴角速度，单位 度每秒
+ */
+HAL_StatusTypeDef Debug_VofaImu6Axis(float accel_x_g, float accel_y_g, float accel_z_g, float gyro_x_dps, float gyro_y_dps, float gyro_z_dps);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

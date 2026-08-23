@@ -1,0 +1,36 @@
+# Keil / CubeMX 编译产物
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.o
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.d
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.crf
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.axf
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.hex
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.bin
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.htm
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.lnp
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.sct.bak
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.dep
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.map
+ApexFly v2.0/MDK-ARM/ApexFly v2.0/*.build_log.htm
+ApexFly v2.0/MDK-ARM/*.uvguix.*
+ApexFly v2.0/MDK-ARM/*.uvoptx.bak
+ApexFly v2.0/MDK-ARM/JLinkLog.txt
+ApexFly v2.0/MDK-ARM/EventRecorderStub.scvd
+ApexFly v2.0/MDK-ARM/DebugConfig/
+ApexFly v2.0/MDK-ARM/RTE/
+ApexFly v2.0/MDK-ARM/.cmsis/
+
+# 黑匣子导出和临时截图（体积大，不是源码）
+BlackboxReader/exports/
+BlackboxReader/bin/
+BlackboxReader/_wave_*
+BlackboxDump/exports/
+
+# 编辑器 / 系统
+.vs/
+.vscode/
+.eide/
+.settings/
+*.user
+Thumbs.db
+Desktop.ini
+.DS_Store
