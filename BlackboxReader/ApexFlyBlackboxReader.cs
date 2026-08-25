@@ -41,8 +41,8 @@ namespace ApexFlyBlackboxReader
         private readonly Regex dumpallStartRegex = new Regex(@"\[BB\] dumpall start records=(\d+)", RegexOptions.Compiled);
         private readonly Regex dumpallProgressRegex = new Regex(@"\[BB\] dumpall progress scanned=(\d+)\s+total=(\d+)", RegexOptions.Compiled);
         private readonly Regex dumpallDoneRegex = new Regex(@"\[BB\] dumpall done scanned=(\d+)", RegexOptions.Compiled);
-        private readonly Regex sessionBeginRegex = new Regex(@"^# session=(\d+)\s+t0_utc=(\S+)", RegexOptions.Compiled);
-        private readonly Regex sessionEndRegex = new Regex(@"^# end session=(\d+)\s+samples=(\d+)\s+t_ms=(\d+)", RegexOptions.Compiled);
+        private readonly Regex sessionBeginRegex = new Regex(@"^# session=(\d+)\s+t0_utc=(\S+)(?:\s+unix=(\d+))?", RegexOptions.Compiled);
+        private readonly Regex sessionEndRegex = new Regex(@"^# end session=(\d+)\s+samples=(\d+)\s+t_ms=(\d+)(?:\s+t1_utc=(\S+))?(?:\s+unix=(\d+))?(?:\s+utc=(\d+))?", RegexOptions.Compiled);
         private static readonly Regex pidPairRegex = new Regex(@"(\d+)=(-?\d+(?:\.\d+)?)", RegexOptions.Compiled);
         private readonly Regex hexLineRegex = new Regex(@"^([0-9A-Fa-f]{8})(?:\s+[0-9A-Fa-f]{2}){1,16}$", RegexOptions.Compiled);
 
@@ -57,7 +57,8 @@ namespace ApexFlyBlackboxReader
             "pitch_max_rate_dps", "pitch_max_corr_us",
             "yaw_max_rate_dps", "yaw_max_corr_us",
             "roll_trim_deg", "pitch_trim_deg",
-            "yaw_angle_kp", "yaw_angle_ki", "yaw_angle_kd"
+            "yaw_angle_kp", "yaw_angle_ki", "yaw_angle_kd",
+            "vertical_speed_kp", "vertical_speed_ki", "vertical_speed_kd", "hover_pwm_us"
         };
 
         private SerialPort serialPort;
@@ -89,8 +90,9 @@ namespace ApexFlyBlackboxReader
         private sealed class SessionState
         {
             public int SessionId;
-            public string T0Utc = "000000";
-            public readonly string[] Pid = new string[26];
+            public string T0Utc = "NA";
+            public string T1Utc = "NA";
+            public readonly string[] Pid = new string[30];
             public long Samples;
             public long LastTms;
             public bool Complete;
@@ -205,11 +207,12 @@ namespace ApexFlyBlackboxReader
             sessionView.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             sessionView.BackColor = Color.FromArgb(18, 20, 23);
             sessionView.ForeColor = Color.Gainsboro;
-            sessionView.Columns.Add("场次", 70);
-            sessionView.Columns.Add("样本", 80);
-            sessionView.Columns.Add("时长 ms", 90);
-            sessionView.Columns.Add("完整", 60);
-            sessionView.Columns.Add("Roll外环Kp / Pitch外环Kp / 内环Kp", 580);
+            sessionView.Columns.Add("场次", 60);
+            sessionView.Columns.Add("北京时间", 160);
+            sessionView.Columns.Add("样本", 70);
+            sessionView.Columns.Add("时长 ms", 80);
+            sessionView.Columns.Add("完整", 50);
+            sessionView.Columns.Add("Roll外环Kp / Pitch外环Kp / 内环Kp", 470);
             sessionView.DoubleClick += WaveButtonClick;
             sessionGroup.Controls.Add(sessionView);
 
@@ -367,7 +370,7 @@ namespace ApexFlyBlackboxReader
             else
             {
                 allDataWriter = new StreamWriter(Path.Combine(currentExportDirectory, "blackbox_data.csv"), false, utf8, 65536);
-                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,armed,conn");
+                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,vz_sp_cms,vz_corr_us,hover_us,alt_state,armed,conn");
             }
             captureActive = true;
             dumpStarted = false;
@@ -604,7 +607,7 @@ namespace ApexFlyBlackboxReader
                 FlushCurrentSession(false);
                 currentSession = new SessionState();
                 currentSession.SessionId = (int)ParseLong(sessionBegin.Groups[1].Value);
-                currentSession.T0Utc = sessionBegin.Groups[2].Value;
+                currentSession.T0Utc = NormalizeTimeText(sessionBegin.Groups[2].Value);
                 sessions.Add(currentSession);
                 sessionRecords = sessions.Count;
                 EnsureSessionWriters(currentSession);
@@ -627,6 +630,22 @@ namespace ApexFlyBlackboxReader
                 return;
             }
 
+            if (line.StartsWith("# altitude", StringComparison.Ordinal))
+            {
+                if (currentSession != null)
+                {
+                    foreach (Match pair in pidPairRegex.Matches(line.Replace("vz_kp", "26").Replace("vz_ki", "27").Replace("vz_kd", "28").Replace("hover_pwm", "29")))
+                    {
+                        int id = (int)ParseLong(pair.Groups[1].Value);
+                        if (id >= 26 && id < currentSession.Pid.Length) currentSession.Pid[id] = pair.Groups[2].Value;
+                    }
+                    StreamWriter altitudeHeaderWriter;
+                    if (sessionCsvWriters.TryGetValue(currentSession.SessionId, out altitudeHeaderWriter)) altitudeHeaderWriter.WriteLine(line);
+                    RefreshSessionView();
+                }
+                return;
+            }
+
             if (line.StartsWith("t_ms,", StringComparison.Ordinal)) return;
 
             Match sessionEnd = sessionEndRegex.Match(line);
@@ -636,6 +655,7 @@ namespace ApexFlyBlackboxReader
                 {
                     currentSession.Complete = true;
                     currentSession.LastTms = ParseLong(sessionEnd.Groups[3].Value);
+                    if (sessionEnd.Groups[4].Success) currentSession.T1Utc = NormalizeTimeText(sessionEnd.Groups[4].Value);
                 }
                 FlushCurrentSession(true);
                 currentSession = null;
@@ -646,6 +666,21 @@ namespace ApexFlyBlackboxReader
             if (line.Length == 0 || !char.IsDigit(line[0])) return;
             string[] values = line.Split(',');
             if (values.Length < 17) return;
+            /* 旧 17/19 列样本补齐成统一 23 列，避免新表头与旧数据错列。 */
+            if (values.Length == 17)
+            {
+                string armed = values[15];
+                string connected = values[16];
+                line = string.Join(",", values, 0, 15) + ",0,0,0,0,0,0," + armed + "," + connected;
+                values = line.Split(',');
+            }
+            else if (values.Length == 19)
+            {
+                string armed = values[17];
+                string connected = values[18];
+                line = string.Join(",", values, 0, 17) + ",0,0,0,0," + armed + "," + connected;
+                values = line.Split(',');
+            }
             if (currentSession == null)
             {
                 currentSession = new SessionState();
@@ -664,7 +699,8 @@ namespace ApexFlyBlackboxReader
             if (sessionVofaWriters.TryGetValue(currentSession.SessionId, out vofaWriter)) vofaWriter.WriteLine(line);
             if ((sampleRecords % 50) == 0)
             {
-                latestLabel.Text = string.Format(CultureInfo.InvariantCulture, "最新数据: 场次 {0}    Roll {1} deg    Pitch {2} deg    Yaw {3} deg    Thr {4} us", currentSession.SessionId, values[1], values[2], values[3], values[10]);
+                string altitudeText = values.Length >= 19 ? values[15] : "-";
+                latestLabel.Text = string.Format(CultureInfo.InvariantCulture, "最新数据: 场次 {0}    Roll {1} deg    Pitch {2} deg    Yaw {3} deg    Thr {4} us    Alt {5} cm", currentSession.SessionId, values[1], values[2], values[3], values[10], altitudeText);
                 UpdateProgress();
             }
         }
@@ -676,7 +712,7 @@ namespace ApexFlyBlackboxReader
             string stem = Path.Combine(currentExportDirectory, "session_" + session.SessionId.ToString("000", CultureInfo.InvariantCulture));
             StreamWriter csv = new StreamWriter(stem + ".csv", false, utf8, 32768);
             csv.WriteLine("# session=" + session.SessionId.ToString(CultureInfo.InvariantCulture) + " t0_utc=" + session.T0Utc);
-            csv.WriteLine("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,armed,conn");
+            csv.WriteLine("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,vz_sp_cms,vz_corr_us,hover_us,alt_state,armed,conn");
             sessionCsvWriters[session.SessionId] = csv;
             StreamWriter vofa = new StreamWriter(stem + ".vofa.csv", false, utf8, 32768);
             sessionVofaWriters[session.SessionId] = vofa;
@@ -716,6 +752,7 @@ namespace ApexFlyBlackboxReader
             {
                 string pid = (session.Pid[0] ?? "-") + " / " + (session.Pid[6] ?? "-") + " / " + (session.Pid[3] ?? "-") + "," + (session.Pid[9] ?? "-");
                 ListViewItem item = new ListViewItem(session.SessionId.ToString(CultureInfo.InvariantCulture));
+                item.SubItems.Add(session.T0Utc);
                 item.SubItems.Add(session.Samples.ToString("N0", CultureInfo.InvariantCulture));
                 item.SubItems.Add(session.LastTms.ToString("N0", CultureInfo.InvariantCulture));
                 item.SubItems.Add(session.Complete ? "是" : "否");
@@ -777,7 +814,7 @@ namespace ApexFlyBlackboxReader
                 writer.WriteLine();
                 foreach (SessionState session in sessions)
                 {
-                    writer.WriteLine("session=" + session.SessionId.ToString(CultureInfo.InvariantCulture) + " samples=" + session.Samples.ToString(CultureInfo.InvariantCulture) + " t_ms=" + session.LastTms.ToString(CultureInfo.InvariantCulture) + " complete=" + (session.Complete ? "1" : "0") + " roll_kp=" + (session.Pid[0] ?? "") + " pitch_kp=" + (session.Pid[6] ?? "") + " roll_inner_kp=" + (session.Pid[3] ?? "") + " pitch_inner_kp=" + (session.Pid[9] ?? ""));
+                    writer.WriteLine("session=" + session.SessionId.ToString(CultureInfo.InvariantCulture) + " t0_bjt=" + session.T0Utc + " t1_bjt=" + session.T1Utc + " samples=" + session.Samples.ToString(CultureInfo.InvariantCulture) + " t_ms=" + session.LastTms.ToString(CultureInfo.InvariantCulture) + " complete=" + (session.Complete ? "1" : "0") + " roll_kp=" + (session.Pid[0] ?? "") + " pitch_kp=" + (session.Pid[6] ?? "") + " roll_inner_kp=" + (session.Pid[3] ?? "") + " pitch_inner_kp=" + (session.Pid[9] ?? ""));
                 }
             }
         }
@@ -897,6 +934,16 @@ namespace ApexFlyBlackboxReader
                             if (id >= 0 && id < session.Pid.Length) session.Pid[id] = pair.Groups[2].Value;
                         }
                     }
+                    else if (line.StartsWith("# altitude", StringComparison.Ordinal))
+                    {
+                        string altitudeLine = line.Replace("vz_kp", "26").Replace("vz_ki", "27").Replace("vz_kd", "28").Replace("hover_pwm", "29");
+                        foreach (Match pair in pidPairRegex.Matches(altitudeLine))
+                        {
+                            int id = 0;
+                            int.TryParse(pair.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out id);
+                            if (id >= 26 && id < session.Pid.Length) session.Pid[id] = pair.Groups[2].Value;
+                        }
+                    }
                     if (line.Length == 0 || line[0] == '#' || line.StartsWith("t_ms", StringComparison.Ordinal)) continue;
                     string[] parts = line.Split(',');
                     if (parts.Length < 15) continue;
@@ -975,7 +1022,7 @@ namespace ApexFlyBlackboxReader
             else
             {
                 allDataWriter = new StreamWriter(Path.Combine(currentExportDirectory, "blackbox_data.csv"), false, utf8, 65536);
-                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,armed,conn");
+                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,vz_sp_cms,vz_corr_us,hover_us,alt_state,armed,conn");
             }
             captureActive = true;
             dumpStarted = true;
@@ -1005,6 +1052,12 @@ namespace ApexFlyBlackboxReader
         {
             long result;
             return long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out result) ? result : 0;
+        }
+
+        private static string NormalizeTimeText(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value == "000000" || value == "0") return "NA";
+            return value;
         }
 
         private void MainFormClosing(object sender, FormClosingEventArgs e)

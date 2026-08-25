@@ -28,11 +28,14 @@
 #include "debug.h"
 #include "i2c.h"
 #include "imu_attitude.h"
+#include "attitude_debug.h"
 #include "imu_bias.h"
 #include "led.h"
 #include "motor_test.h"
 #include "mpu6050.h"
+#include "baro.h"
 #include "blackbox.h"
+#include "gps.h"
 #include "radio.h"
 /* USER CODE END Includes */
 
@@ -72,6 +75,13 @@ const osThreadAttr_t imuTestTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 512 * 4
 };
+/* Definitions for attitudeDebugTask */
+osThreadId_t attitudeDebugTaskHandle;
+const osThreadAttr_t attitudeDebugTask_attributes = {
+  .name = "attitudeDebugTask",
+  .priority = (osPriority_t) osPriorityBelowNormal,
+  .stack_size = 384 * 4
+};
 /* Definitions for motorTestTask */
 osThreadId_t motorTestTaskHandle;
 const osThreadAttr_t motorTestTask_attributes = {
@@ -100,6 +110,20 @@ const osThreadAttr_t blackboxTask_attributes = {
   .priority = (osPriority_t) osPriorityBelowNormal,
   .stack_size = 768 * 4
 };
+/* Definitions for baroTask */
+osThreadId_t baroTaskHandle;
+const osThreadAttr_t baroTask_attributes = {
+  .name = "baroTask",
+  .priority = (osPriority_t) osPriorityBelowNormal,
+  .stack_size = 768 * 4
+};
+/* Definitions for gpsTask */
+osThreadId_t gpsTaskHandle;
+const osThreadAttr_t gpsTask_attributes = {
+  .name = "gpsTask",
+  .priority = (osPriority_t) osPriorityBelowNormal,
+  .stack_size = 512 * 4
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -108,10 +132,13 @@ const osThreadAttr_t blackboxTask_attributes = {
 
 void StartDefaultTask(void *argument);
 void StartImuTestTask(void *argument);
+void StartAttitudeDebugTask(void *argument);
 void StartMotorTestTask(void *argument);
 void StartLedTask(void *argument);
 void StartRadioTask(void *argument);
 void StartBlackboxTask(void *argument);
+void StartBaroTask(void *argument);
+void StartGpsTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -166,6 +193,9 @@ void MX_FREERTOS_Init(void) {
   /* creation of imuTestTask */
   imuTestTaskHandle = osThreadNew(StartImuTestTask, NULL, &imuTestTask_attributes);
 
+  /* creation of attitudeDebugTask */
+  attitudeDebugTaskHandle = osThreadNew(StartAttitudeDebugTask, NULL, &attitudeDebugTask_attributes);
+
   /* creation of motorTestTask */
   motorTestTaskHandle = osThreadNew(StartMotorTestTask, NULL, &motorTestTask_attributes);
 
@@ -177,6 +207,12 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of blackboxTask */
   blackboxTaskHandle = osThreadNew(StartBlackboxTask, NULL, &blackboxTask_attributes);
+
+  /* creation of baroTask */
+  baroTaskHandle = osThreadNew(StartBaroTask, NULL, &baroTask_attributes);
+
+  /* creation of gpsTask */
+  gpsTaskHandle = osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -237,6 +273,20 @@ void StartImuTestTask(void *argument)
   /* USER CODE END StartImuTestTask */
 }
 
+/* USER CODE BEGIN Header_StartAttitudeDebugTask */
+/**
+  * @brief  姿态角调试串口任务，每100ms输出一次Roll、Pitch0000、Yaw。
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartAttitudeDebugTask */
+void StartAttitudeDebugTask(void *argument)
+{
+  /* USER CODE BEGIN StartAttitudeDebugTask */
+  AttitudeDebug_Task(argument);
+  /* USER CODE END StartAttitudeDebugTask */
+}
+
 /* USER CODE BEGIN Header_StartMotorTestTask */
 /**
   * @brief  遥控油门跟杆任务。
@@ -291,6 +341,26 @@ void StartBlackboxTask(void *argument)
   /* USER CODE BEGIN StartBlackboxTask */
   Blackbox_Task(argument);
   /* USER CODE END StartBlackboxTask */
+}
+
+/**
+  * @brief  气压任务。独占 I2C2 上的 SPL06，采地面零点后发布离地高度。
+  */
+void StartBaroTask(void *argument)
+{
+  /* USER CODE BEGIN StartBaroTask */
+  Baro_Task(argument);
+  /* USER CODE END StartBaroTask */
+}
+
+/**
+  * @brief  GPS 任务。独占 USART2 上的 ATGM336H，解析 NMEA，给黑匣子提供 UTC 时间。
+  */
+void StartGpsTask(void *argument)
+{
+  /* USER CODE BEGIN StartGpsTask */
+  GPS_Task(argument);
+  /* USER CODE END StartGpsTask */
 }
 
 /* Private application code --------------------------------------------------*/

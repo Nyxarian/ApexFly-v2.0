@@ -17,7 +17,7 @@ namespace ApexFlyBlackboxReader
         private readonly Dictionary<string, CheckBox> boxes = new Dictionary<string, CheckBox>();
         private readonly Dictionary<string, Color> colors = new Dictionary<string, Color>();
         private readonly Dictionary<string, string> labels = new Dictionary<string, string>();
-        private readonly string[] pidValues = new string[26];
+        private readonly string[] pidValues = new string[30];
 
         private readonly PlotCanvas commandCanvas = new PlotCanvas();
         private readonly PlotCanvas attitudeCanvas = new PlotCanvas();
@@ -50,17 +50,18 @@ namespace ApexFlyBlackboxReader
             "roll", "pitch", "yaw",
             "roll_rate", "pitch_rate", "yaw_rate",
             "roll_corr", "pitch_corr", "yaw_corr",
-            "thr", "m1", "m2", "m3", "m4"
+            "thr", "m1", "m2", "m3", "m4",
+            "alt_cm", "vz_cms", "vz_sp_cms", "vz_corr_us", "hover_us", "alt_state"
         };
 
         private static readonly string[] CommandChannels =
         {
-            "thr", "m1", "m2", "m3", "m4", "roll_corr", "pitch_corr", "yaw_corr"
+            "thr", "m1", "m2", "m3", "m4", "roll_corr", "pitch_corr", "yaw_corr", "vz_corr_us", "hover_us", "alt_state"
         };
 
         private static readonly string[] AttitudeChannels =
         {
-            "roll", "pitch", "yaw", "roll_rate", "pitch_rate", "yaw_rate"
+            "roll", "pitch", "yaw", "roll_rate", "pitch_rate", "yaw_rate", "alt_cm", "vz_cms", "vz_sp_cms"
         };
 
         public WaveformForm(string csvPath, string titleText)
@@ -87,7 +88,8 @@ namespace ApexFlyBlackboxReader
         private static bool IsCommandChannel(string name)
         {
             return name == "thr" || name == "m1" || name == "m2" || name == "m3" || name == "m4"
-                || name == "roll_corr" || name == "pitch_corr" || name == "yaw_corr";
+                || name == "roll_corr" || name == "pitch_corr" || name == "yaw_corr"
+                || name == "vz_corr_us" || name == "hover_us" || name == "alt_state";
         }
 
         private void LoadCsv()
@@ -102,7 +104,8 @@ namespace ApexFlyBlackboxReader
                     if (line.Length == 0 || line[0] == '#' || line.StartsWith("t_ms", StringComparison.Ordinal) || line.StartsWith("session,", StringComparison.Ordinal)) continue;
                     string[] parts = line.Split(',');
                     int offset = 0;
-                    if (parts.Length >= 18) offset = 1;
+                    /* 合并表比单场 CSV 多一个 session 列；17/19/23 列是单场，18/20/24 列是合并表。 */
+                    if ((parts.Length == 18) || (parts.Length == 20) || (parts.Length == 24)) offset = 1;
                     if (parts.Length < offset + 15) continue;
                     float t;
                     if (!float.TryParse(parts[offset], NumberStyles.Float, CultureInfo.InvariantCulture, out t)) continue;
@@ -121,6 +124,30 @@ namespace ApexFlyBlackboxReader
                     AddValue("m2", parts, offset + 12);
                     AddValue("m3", parts, offset + 13);
                     AddValue("m4", parts, offset + 14);
+                    if (parts.Length >= offset + 19)
+                    {
+                        AddValue("alt_cm", parts, offset + 15);
+                        AddValue("vz_cms", parts, offset + 16);
+                    }
+                    else
+                    {
+                        series["alt_cm"].Add(0f);
+                        series["vz_cms"].Add(0f);
+                    }
+                    if (parts.Length >= offset + 23)
+                    {
+                        AddValue("vz_sp_cms", parts, offset + 17);
+                        AddValue("vz_corr_us", parts, offset + 18);
+                        AddValue("hover_us", parts, offset + 19);
+                        AddValue("alt_state", parts, offset + 20);
+                    }
+                    else
+                    {
+                        series["vz_sp_cms"].Add(0f);
+                        series["vz_corr_us"].Add(0f);
+                        series["hover_us"].Add(0f);
+                        series["alt_state"].Add(0f);
+                    }
                 }
             }
             if (tMs.Count == 0) throw new InvalidOperationException("这个 CSV 里没有样本。");
@@ -161,7 +188,8 @@ namespace ApexFlyBlackboxReader
             string pitchIn = PidOrDash(9);
             string yawRate = PidOrDash(12);
             string yawAngle = PidOrDash(23);
-            return "PID  Roll 外" + rollOut + "/内" + rollIn + "    Pitch 外" + pitchOut + "/内" + pitchIn + "    Yaw角" + yawAngle + " 角速度" + yawRate;
+            string vzPid = PidOrDash(26) + "/" + PidOrDash(27) + "/" + PidOrDash(28);
+            return "PID  Roll 外" + rollOut + "/内" + rollIn + "    Pitch 外" + pitchOut + "/内" + pitchIn + "    Yaw角" + yawAngle + " 角速度" + yawRate + "    垂速" + vzPid + " 悬停" + PidOrDash(29);
         }
 
         private string PidOrDash(int id)
@@ -185,6 +213,12 @@ namespace ApexFlyBlackboxReader
             colors["m2"] = Color.FromArgb(80, 255, 80);
             colors["m3"] = Color.FromArgb(80, 160, 255);
             colors["m4"] = Color.FromArgb(255, 220, 80);
+            colors["alt_cm"] = Color.FromArgb(120, 220, 255);
+            colors["vz_cms"] = Color.FromArgb(255, 180, 90);
+            colors["vz_sp_cms"] = Color.FromArgb(120, 255, 150);
+            colors["vz_corr_us"] = Color.FromArgb(255, 120, 180);
+            colors["hover_us"] = Color.FromArgb(210, 210, 210);
+            colors["alt_state"] = Color.FromArgb(180, 140, 255);
 
             labels["roll"] = "横滚角";
             labels["pitch"] = "俯仰角";
@@ -200,10 +234,16 @@ namespace ApexFlyBlackboxReader
             labels["m2"] = "M2";
             labels["m3"] = "M3";
             labels["m4"] = "M4";
+            labels["alt_cm"] = "高度cm";
+            labels["vz_cms"] = "实际垂速";
+            labels["vz_sp_cms"] = "目标垂速";
+            labels["vz_corr_us"] = "垂速修正";
+            labels["hover_us"] = "悬停PWM";
+            labels["alt_state"] = "高度状态";
 
             Panel top = new Panel();
             top.Dock = DockStyle.Top;
-            top.Height = 108;
+            top.Height = 132;
             top.BackColor = Color.FromArgb(24, 26, 30);
             Controls.Add(top);
 
@@ -216,7 +256,7 @@ namespace ApexFlyBlackboxReader
             pidLabel.Text = PidText();
             top.Controls.Add(pidLabel);
 
-            string[] defaults = { "roll", "pitch", "roll_rate", "pitch_rate", "thr" };
+            string[] defaults = { "roll", "pitch", "roll_rate", "pitch_rate", "thr", "alt_cm" };
             HashSet<string> on = new HashSet<string>(defaults);
             int x = 12;
             int y = 50;
@@ -234,7 +274,7 @@ namespace ApexFlyBlackboxReader
                 if (x > 980)
                 {
                     x = 12;
-                    y = 74;
+                    y += 24;
                 }
             }
 
@@ -263,7 +303,7 @@ namespace ApexFlyBlackboxReader
             split.BringToFront();
 
             split.Panel1.Controls.Add(BuildPane(commandCanvas, "油门 / 电机 / 修正 (µs)", true));
-            split.Panel2.Controls.Add(BuildPane(attitudeCanvas, "姿态角 / 角速度 (° 和 °/s)", false));
+            split.Panel2.Controls.Add(BuildPane(attitudeCanvas, "姿态 / 高度 / 升速", false));
         }
 
         private Button MakeTopButton(string text, ref int right, EventHandler click)

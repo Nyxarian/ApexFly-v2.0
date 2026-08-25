@@ -1,32 +1,17 @@
 /**
  * @file imu_attitude.h
- * @brief 互补滤波姿态解算。
+ * @brief MPU6050 六轴 Mahony4 风格四元数姿态解算接口。
  *
- * 输入已经扣除陀螺仪零偏的六轴数据。
- * 横滚和俯仰由陀螺仪积分加加速度重力方向修正得到。
- * 偏航没有磁力计，只能做相对积分，长时间会缓慢漂移。
+ * 内部姿态状态保存在 MPU6050 芯片坐标系四元数中，输入陀螺仪必须已经扣除零偏，
+ * 加速度单位为 g，陀螺仪单位为度每秒。对外仍输出 ApexFly 原有的机体系角度和角速度，
+ * 因此姿态串级 PID、混控和水平零点接口不需要改变。
  *
- * IMU_Attitude_t 里保存的是芯片坐标系角度，互补滤波必须继续用这组值，
- * 不要把映射后的机体系角度写回去。对外给 VOFA+ / 控制用时，调用
- * IMU_Attitude_MapToBody()。装机水平零点在映射之后减，见 imu_level。
+ * 当前芯片系到机体系的实测映射保持不变：
+ * - 机体系 Roll  = 芯片系 pitch_deg，角速度 = gyro_y
+ * - 机体系 Pitch = 芯片系 roll_deg，角速度 = gyro_x
+ * - 机体系 Yaw   = -芯片系 yaw_deg，角速度 = -gyro_z
  *
- * ---------- 映射前（芯片系，实机测得）----------
- * roll_deg  对应旧 VOFA+ I0，管前后：
- *   前倾（机头低、往前飞）为负；后倾（机头高、往后飞/抬头）为正。
- * pitch_deg 对应旧 VOFA+ I1，管左右：
- *   左倾（往左飞）为负；右倾（往右飞）为正。
- * yaw_deg   对应旧 VOFA+ I2，管自旋：
- *   逆时针为正；顺时针为负。
- *
- * ---------- 映射公式 ----------
- * 机体系横滚 Roll  =  芯片系 pitch_deg，角速度用芯片系 gyro_y
- * 机体系俯仰 Pitch =  芯片系 roll_deg，角速度用芯片系 gyro_x
- * 机体系偏航 Yaw   = -芯片系 yaw_deg，角速度用 -芯片系 gyro_z
- *
- * ---------- 映射后（机体系，飞控习惯）----------
- * I0 = Roll ：右倾为正，对应往右飞；左倾为负，对应往左飞。
- * I1 = Pitch：抬头为正，对应后倾、往后飞；低头为负，对应前倾、往前飞。
- * I2 = Yaw  ：顺时针为正，机头右转；逆时针为负，机头左转。
+ * MPU6050 没有绝对航向参考，Yaw 仍然是相对角度，长时间会因陀螺仪残余零偏漂移。
  */
 
 #ifndef IMU_ATTITUDE_H
@@ -41,48 +26,100 @@ extern "C" {
 
 typedef struct
 {
-    /* 芯片系。映射前对应旧 I0：前倾为负（往前飞），后倾为正（往后飞）。 */
-    float roll_deg;
-    /* 芯片系。映射前对应旧 I1：左倾为负（往左飞），右倾为正（往右飞）。 */
-    float pitch_deg;
-    /* 芯片系。映射前对应旧 I2：逆时针为正，顺时针为负。 */
-    float yaw_deg;
+    /* 芯片系四元数标量部分。 */
+    float q0;
+    /* 芯片系四元数 X 虚部。 */
+    float q1;
+    /* 芯片系四元数 Y 虚部。 */
+    float q2;
+    /* 芯片系四元数 Z 虚部。 */
+    float q3;
+    /* Mahony 积分反馈的 X 轴角速度修正，单位弧度每秒。 */
+    float integral_x;
+    /* Mahony 积分反馈的 Y 轴角速度修正，单位弧度每秒。 */
+    float integral_y;
+    /* Mahony 积分反馈的 Z 轴角速度修正，单位弧度每秒。 */
+    float integral_z;
+    /* 最近一拍加速度模长，单位 g。 */
+    float accel_norm_g;
+    /* 最近一拍重力方向误差，单位无量纲。 */
+    float fusion_error_x;
+    /* 最近一拍重力方向误差，单位无量纲。 */
+    float fusion_error_y;
+    /* 最近一拍重力方向误差，单位无量纲。 */
+    float fusion_error_z;
+    /* true 表示已经由有效加速度完成初始化。 */
     bool initialized;
+    /* true 表示本拍使用了加速度重力修正。 */
+    bool accel_correction_valid;
 } IMU_Attitude_t;
 
 typedef struct
 {
-    /* 映射后横滚，单位度。右倾为正（往右飞），左倾为负（往左飞）。 */
+    /* 映射后横滚角，单位度。右倾为正，左倾为负。 */
     float roll_deg;
-    /* 映射后俯仰，单位度。抬头为正（往后飞），低头为负（往前飞）。 */
+    /* 映射后俯仰角，单位度。抬头为正，低头为负。 */
     float pitch_deg;
-    /* 映射后偏航，单位度。顺时针为正（机头右转），逆时针为负。 */
+    /* 映射后偏航角，单位度。顺时针为正，逆时针为负。 */
     float yaw_deg;
-    /* 机体系横滚角速度，单位度每秒。右倾加快为正。 */
+    /* 机体系横滚角速度，单位度每秒。 */
     float roll_rate_dps;
-    /* 机体系俯仰角速度，单位度每秒。抬头加快为正。 */
+    /* 机体系俯仰角速度，单位度每秒。 */
     float pitch_rate_dps;
-    /* 机体系偏航角速度，单位度每秒。顺时针加快为正。 */
+    /* 机体系偏航角速度，单位度每秒。 */
     float yaw_rate_dps;
 } IMU_BodyAttitude_t;
 
+/**
+ * @brief 清零姿态状态并设置单位四元数。
+ * @param attitude 姿态状态对象地址。
+ */
 void IMU_Attitude_Init(IMU_Attitude_t *attitude);
 
 /**
- * @brief 用一组减过零偏的六轴数据更新芯片系姿态角。
- * @param delta_time_s 与上一拍的时间间隔，单位秒，100Hz 时应接近 0.01。
- * @return 本拍更新成功返回 true。
+ * @brief 用减过陀螺仪零偏的六轴数据更新一次四元数姿态。
+ * @param attitude 姿态状态对象地址。
+ * @param data MPU6050 数据，加速度单位 g，陀螺仪单位度每秒。
+ * @param delta_time_s 与上一拍的实际时间间隔，单位秒。
+ * @return 本拍更新成功返回 true，参数、dt 或四元数状态异常返回 false。
  */
 bool IMU_Attitude_Update(IMU_Attitude_t *attitude, const MPU6050_Data_t *data, float delta_time_s);
 
 /**
- * @brief 把芯片系姿态和减过零偏的陀螺映射成机体系角度、角速度。
- *
- * Roll  = 芯片系 pitch_deg，roll_rate  = gyro_y
- * Pitch = 芯片系 roll_deg，pitch_rate = gyro_x
- * Yaw   = -芯片系 yaw_deg，yaw_rate   = -gyro_z
+ * @brief 把芯片系四元数姿态和减过零偏的陀螺仪映射成机体系输出。
+ * @param attitude 当前四元数姿态。
+ * @param data 当前已扣除陀螺仪零偏的数据。
+ * @param body 输出的机体系角度和角速度。
  */
 void IMU_Attitude_MapToBody(const IMU_Attitude_t *attitude, const MPU6050_Data_t *data, IMU_BodyAttitude_t *body);
+
+/**
+ * @brief 用当前四元数把加速度投影到向上方向并扣除重力。
+ * @param attitude 当前四元数姿态。
+ * @param data 当前加速度数据，单位 g。
+ * @return 垂直线性加速度，单位米每二次方秒，向上为正。
+ */
+float IMU_Attitude_VerticalAccelUp(const IMU_Attitude_t *attitude, const MPU6050_Data_t *data);
+
+/** @brief 获取最近一拍的加速度模长，单位 g。 */
+float IMU_Attitude_GetAccelNormG(const IMU_Attitude_t *attitude);
+
+/** @brief 获取最近一拍是否使用了加速度重力修正。 */
+bool IMU_Attitude_IsAccelCorrectionValid(const IMU_Attitude_t *attitude);
+
+/**
+ * @brief 获取最近一拍的 Mahony 重力方向误差。
+ * @param x 输出 X 误差地址，可为空。
+ * @param y 输出 Y 误差地址，可为空。
+ * @param z 输出 Z 误差地址，可为空。
+ */
+void IMU_Attitude_GetFusionError(const IMU_Attitude_t *attitude, float *x, float *y, float *z);
+
+/**
+ * @brief 获取当前四元数。
+ * @param q 输出四元数数组，顺序为 q0、q1、q2、q3。
+ */
+void IMU_Attitude_GetQuaternion(const IMU_Attitude_t *attitude, float q[4]);
 
 #ifdef __cplusplus
 }

@@ -1,23 +1,29 @@
 /**
  * @file pid_table.c
- * @brief RAM PID 表实现：26 个协议 ID 与 6 组串级参数互转。
+ * @brief RAM 参数表实现：30 个协议 ID 与姿态串级、满杆油门上限互转。
  *
  * 增益和限幅改完后只刷新 Pid_t 的数字并 Reset 积分，不重新 Init 整轴以外的状态机。
  * trim 先存着给 GET/SET 显示，不送进控制目标角。
+ * APEX_PID_HOVER_PWM_US 表示满杆油门上限；垂速 PID 项仍可读写，但不再参与电机输出。
  */
 
 #include "pid_table.h"
 
 #include "attitude_control.h"
+#include "altitude_control.h"
 #include "blackbox.h"
-#include "debug.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include <stddef.h>
 #include <string.h>
 
-#define PID_TABLE_PARAMETER_VERSION 1U
+#define PID_TABLE_PARAMETER_VERSION 2U
 #define PID_TABLE_GAIN_MAX 50.0f
+#define PID_TABLE_VZ_KP_MAX 500.0f
+#define PID_TABLE_VZ_KI_MAX 100.0f
+#define PID_TABLE_VZ_KD_MAX 50.0f
+#define PID_TABLE_MAX_THROTTLE_MIN_US 1200.0f
+#define PID_TABLE_MAX_THROTTLE_MAX_US 2000.0f
 #define PID_TABLE_RATE_MIN 20.0f
 #define PID_TABLE_RATE_MAX 300.0f
 #define PID_TABLE_CORR_MIN 20.0f
@@ -27,6 +33,7 @@
 typedef struct
 {
     AttitudePidParams_t pid;
+    AltitudeControlParams_t altitude;
     float roll_trim_deg;
     float pitch_trim_deg;
 } PidTableState_t;
@@ -83,6 +90,10 @@ static void PidTable_ExportValues(int32_t *values_q10000)
     values_q10000[APEX_PID_YAW_ANGLE_KP] = PidTable_FloatToQ10000(pid->yaw_angle.kp);
     values_q10000[APEX_PID_YAW_ANGLE_KI] = PidTable_FloatToQ10000(pid->yaw_angle.ki);
     values_q10000[APEX_PID_YAW_ANGLE_KD] = PidTable_FloatToQ10000(pid->yaw_angle.kd);
+    values_q10000[APEX_PID_VERTICAL_SPEED_KP] = PidTable_FloatToQ10000(pid_table.altitude.vz_kp);
+    values_q10000[APEX_PID_VERTICAL_SPEED_KI] = PidTable_FloatToQ10000(pid_table.altitude.vz_ki);
+    values_q10000[APEX_PID_VERTICAL_SPEED_KD] = PidTable_FloatToQ10000(pid_table.altitude.vz_kd);
+    values_q10000[APEX_PID_HOVER_PWM_US] = PidTable_FloatToQ10000(pid_table.altitude.hover_pwm_us);
 }
 
 static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
@@ -124,6 +135,18 @@ static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
     case APEX_PID_ROLL_TRIM_DEG:
     case APEX_PID_PITCH_TRIM_DEG:
         if (PidTable_Absf(value) > PID_TABLE_TRIM_ABS_MAX) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_VERTICAL_SPEED_KP:
+        if ((value < 0.0f) || (value > PID_TABLE_VZ_KP_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_VERTICAL_SPEED_KI:
+        if ((value < 0.0f) || (value > PID_TABLE_VZ_KI_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_VERTICAL_SPEED_KD:
+        if ((value < 0.0f) || (value > PID_TABLE_VZ_KD_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_HOVER_PWM_US:
+        if ((value < PID_TABLE_MAX_THROTTLE_MIN_US) || (value > PID_TABLE_MAX_THROTTLE_MAX_US)) return APEX_PID_STATUS_OUT_OF_RANGE;
         break;
     default:
         return APEX_PID_STATUS_INVALID_PARAMETER;
@@ -181,6 +204,10 @@ static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
     case APEX_PID_YAW_ANGLE_KP: pid->yaw_angle.kp = value; break;
     case APEX_PID_YAW_ANGLE_KI: pid->yaw_angle.ki = value; break;
     case APEX_PID_YAW_ANGLE_KD: pid->yaw_angle.kd = value; break;
+    case APEX_PID_VERTICAL_SPEED_KP: pid_table.altitude.vz_kp = value; break;
+    case APEX_PID_VERTICAL_SPEED_KI: pid_table.altitude.vz_ki = value; break;
+    case APEX_PID_VERTICAL_SPEED_KD: pid_table.altitude.vz_kd = value; break;
+    case APEX_PID_HOVER_PWM_US: pid_table.altitude.hover_pwm_us = value; break;
     default:
         return APEX_PID_STATUS_INVALID_PARAMETER;
     }
@@ -230,17 +257,32 @@ bool PidTable_ImportSnapshot(const int32_t *values_q10000)
     }
     taskEXIT_CRITICAL();
     AttitudeControl_ApplyParams(&pid_table.pid);
+    AltitudeControl_ApplyParams(&pid_table.altitude);
     return true;
+}
+
+uint16_t PidTable_GetMaxThrottleUs(void)
+{
+    float max_throttle_us;
+
+    taskENTER_CRITICAL();
+    max_throttle_us = pid_table.altitude.hover_pwm_us;
+    taskEXIT_CRITICAL();
+    if (max_throttle_us < PID_TABLE_MAX_THROTTLE_MIN_US) max_throttle_us = PID_TABLE_MAX_THROTTLE_MIN_US;
+    if (max_throttle_us > PID_TABLE_MAX_THROTTLE_MAX_US) max_throttle_us = PID_TABLE_MAX_THROTTLE_MAX_US;
+    return (uint16_t)(max_throttle_us + 0.5f);
 }
 
 static void PidTable_LoadCompiledDefaults(void)
 {
     taskENTER_CRITICAL();
     pid_table.pid = *AttitudeControl_GetDefaultParams();
+    pid_table.altitude = *AltitudeControl_GetDefaultParams();
     pid_table.roll_trim_deg = 0.0f;
     pid_table.pitch_trim_deg = 0.0f;
     taskEXIT_CRITICAL();
     AttitudeControl_ApplyParams(&pid_table.pid);
+    AltitudeControl_ApplyParams(&pid_table.altitude);
 }
 
 void PidTable_Init(void)
@@ -250,9 +292,11 @@ void PidTable_Init(void)
     {
         memset(&pid_table, 0, sizeof(pid_table));
         pid_table.pid = *AttitudeControl_GetDefaultParams();
+        pid_table.altitude = *AltitudeControl_GetDefaultParams();
         pid_table_ready = true;
         taskEXIT_CRITICAL();
         AttitudeControl_ApplyParams(&pid_table.pid);
+        AltitudeControl_ApplyParams(&pid_table.altitude);
         return;
     }
     taskEXIT_CRITICAL();
@@ -288,11 +332,14 @@ void PidTable_HandleCommand(const ApexPidCommand_t *command, bool armed, ApexPid
         taskENTER_CRITICAL();
         status = PidTable_SetValue(command->parameter_id, value);
         taskEXIT_CRITICAL();
-        if (status == APEX_PID_STATUS_OK) AttitudeControl_ApplyParams(&pid_table.pid);
+        if (status == APEX_PID_STATUS_OK)
+        {
+            AltitudeControl_ApplyParams(&pid_table.altitude);
+            AttitudeControl_ApplyParams(&pid_table.pid);
+        }
         taskENTER_CRITICAL();
         PidTable_FillResponse(response, command->sequence, command->operation, status);
         taskEXIT_CRITICAL();
-        Debug_Printf("[PID] SET id=%u value=%.4f status=%u.\r\n", (unsigned int)command->parameter_id, (double)value, (unsigned int)status);
         return;
 
     case APEX_PID_OPERATION_LOAD_DEFAULTS:
@@ -303,7 +350,6 @@ void PidTable_HandleCommand(const ApexPidCommand_t *command, bool armed, ApexPid
         }
         PidTable_LoadCompiledDefaults();
         PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_OK);
-        Debug_Printf("[PID] load defaults.\r\n");
         return;
 
     case APEX_PID_OPERATION_SAVE:
@@ -323,7 +369,6 @@ void PidTable_HandleCommand(const ApexPidCommand_t *command, bool armed, ApexPid
             return;
         }
         PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_OK);
-        Debug_Printf("[PID] save queued.\r\n");
         return;
 
     case APEX_PID_OPERATION_LOAD_SAVED:
@@ -343,7 +388,6 @@ void PidTable_HandleCommand(const ApexPidCommand_t *command, bool armed, ApexPid
             return;
         }
         PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_OK);
-        Debug_Printf("[PID] load saved.\r\n");
         return;
 
     case APEX_PID_OPERATION_ACCEL_CAL_SAMPLE:

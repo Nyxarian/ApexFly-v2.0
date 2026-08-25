@@ -7,6 +7,4 @@ if not exist "%CSC%" (
 )
 "%CSC%" /nologo /target:winexe /platform:anycpu /out:ApexFlyBlackboxReader.exe /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll ApexFlyBlackboxReader.cs ApexFlyWaveform.cs
 if errorlevel 1 exit /b 1
-if not exist bin mkdir bin
-copy /Y ApexFlyBlackboxReader.exe bin\ApexFlyBlackboxReader.exe >nul
 echo OK ApexFlyBlackboxReader.exe

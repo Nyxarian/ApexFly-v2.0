@@ -16,7 +16,6 @@
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <string.h>
 
 /*
  * 调试串口与老工程保持一致：USART3。
@@ -35,13 +34,6 @@ static char debug_printf_buffer[DEBUG_PRINTF_BUFFER_SIZE];
 /* 静态互斥锁不占用 FreeRTOS 堆内存。 */
 static StaticSemaphore_t debug_mutex_storage;
 static SemaphoreHandle_t debug_mutex;
-
-/*
- * VOFA+ JustFloat 协议的帧尾。
- * 这 4 个字节对应浮点数正无穷 0x7F800000。
- * 本芯片是小端，所以串口上的发送顺序是 00 00 80 7F。
- */
-static const uint8_t vofa_justfloat_tail[4] = {0x00U, 0x00U, 0x80U, 0x7FU};
 
 /**
  * @brief 创建互斥锁。可以重复调用，只会创建一次。
@@ -90,33 +82,64 @@ static void Debug_Unlock(void)
 }
 
 /**
- * @brief 通过 USART3 阻塞发送原始字节。
+ * @brief 仅输出机体系 Roll、Pitch、Yaw，供姿态方向和回正测试使用。
+ */
+int Debug_PrintAttitudeAngles(float roll_deg, float pitch_deg, float yaw_deg)
+{
+    int length;
+    HAL_StatusTypeDef status;
+
+    if (!Debug_Lock())
+    {
+        return -1;
+    }
+
+    length = snprintf(debug_printf_buffer, sizeof(debug_printf_buffer), "[ATT] roll=%+.2f deg, pitch=%+.2f deg, yaw=%+.2f deg.\r\n", (double)roll_deg, (double)pitch_deg, (double)yaw_deg);
+    if ((length < 0) || (length >= (int)sizeof(debug_printf_buffer)))
+    {
+        Debug_Unlock();
+        return -1;
+    }
+
+    status = HAL_UART_Transmit(DEBUG_UART, (uint8_t *)debug_printf_buffer, (uint16_t)length, DEBUG_TIMEOUT_MS);
+    Debug_Unlock();
+    if (status != HAL_OK)
+    {
+        return -1;
+    }
+    return length;
+}
+
+/**
+ * @brief 通过 USART3 发送一段原始字节，供黑匣子整行 CSV 导出使用。
  */
 HAL_StatusTypeDef Debug_Send(const uint8_t *data, uint16_t length)
 {
     HAL_StatusTypeDef status;
 
-    if ((data == NULL) || (length == 0U))
+    if ((data == NULL) && (length > 0U))
     {
         return HAL_ERROR;
     }
-
+    if (length == 0U)
+    {
+        return HAL_OK;
+    }
     if (!Debug_Lock())
     {
         return HAL_BUSY;
     }
-
     status = HAL_UART_Transmit(DEBUG_UART, (uint8_t *)data, length, DEBUG_TIMEOUT_MS);
     Debug_Unlock();
     return status;
 }
 
 /**
- * @brief 格式化一行文本并发送。超长日志会被截断到缓冲区大小。
+ * @brief 格式化文本日志并发送。黑匣子 dump / dumpall 走这条路径。
  */
 int Debug_Printf(const char *format, ...)
 {
-    va_list argument_list;
+    va_list args;
     int length;
     HAL_StatusTypeDef status;
 
@@ -124,35 +147,26 @@ int Debug_Printf(const char *format, ...)
     {
         return -1;
     }
-
     if (!Debug_Lock())
     {
         return -1;
     }
 
-    va_start(argument_list, format);
-    length = vsnprintf(debug_printf_buffer, sizeof(debug_printf_buffer), format, argument_list);
-    va_end(argument_list);
-
-    if (length < 0)
+    va_start(args, format);
+    length = vsnprintf(debug_printf_buffer, sizeof(debug_printf_buffer), format, args);
+    va_end(args);
+    if ((length < 0) || (length >= (int)sizeof(debug_printf_buffer)))
     {
         Debug_Unlock();
         return -1;
     }
 
-    if (length >= (int)sizeof(debug_printf_buffer))
-    {
-        length = (int)sizeof(debug_printf_buffer) - 1;
-    }
-
     status = HAL_UART_Transmit(DEBUG_UART, (uint8_t *)debug_printf_buffer, (uint16_t)length, DEBUG_TIMEOUT_MS);
     Debug_Unlock();
-
     if (status != HAL_OK)
     {
         return -1;
     }
-
     return length;
 }
 
@@ -161,19 +175,9 @@ int Debug_Printf(const char *format, ...)
  */
 HAL_StatusTypeDef Debug_VofaJustFloat(const float *channels, uint8_t channel_count)
 {
-    uint8_t transmit_buffer[DEBUG_VOFA_MAX_CHANNELS * sizeof(float) + sizeof(vofa_justfloat_tail)];
-    uint16_t data_length;
-
-    if ((channels == NULL) || (channel_count == 0U) || (channel_count > DEBUG_VOFA_MAX_CHANNELS))
-    {
-        return HAL_ERROR;
-    }
-
-    data_length = (uint16_t)channel_count * (uint16_t)sizeof(float);
-    memcpy(transmit_buffer, channels, data_length);
-    memcpy(&transmit_buffer[data_length], vofa_justfloat_tail, sizeof(vofa_justfloat_tail));
-
-    return Debug_Send(transmit_buffer, data_length + (uint16_t)sizeof(vofa_justfloat_tail));
+    (void)channels;
+    (void)channel_count;
+    return HAL_OK;
 }
 
 /**
@@ -181,50 +185,9 @@ HAL_StatusTypeDef Debug_VofaJustFloat(const float *channels, uint8_t channel_cou
  */
 HAL_StatusTypeDef Debug_VofaFireWater(const float *channels, uint8_t channel_count)
 {
-    char line[DEBUG_PRINTF_BUFFER_SIZE];
-    int offset = 0;
-    uint8_t i;
-
-    if ((channels == NULL) || (channel_count == 0U) || (channel_count > DEBUG_VOFA_MAX_CHANNELS))
-    {
-        return HAL_ERROR;
-    }
-
-    for (i = 0U; i < channel_count; i++)
-    {
-        int written;
-
-        if (i == 0U)
-        {
-            written = snprintf(&line[offset], sizeof(line) - (size_t)offset, "%.6f", channels[i]);
-        }
-        else
-        {
-            written = snprintf(&line[offset], sizeof(line) - (size_t)offset, ",%.6f", channels[i]);
-        }
-
-        if (written < 0)
-        {
-            return HAL_ERROR;
-        }
-
-        offset += written;
-        if (offset >= (int)(sizeof(line) - 3))
-        {
-            return HAL_ERROR;
-        }
-    }
-
-    if ((sizeof(line) - (size_t)offset) < 3U)
-    {
-        return HAL_ERROR;
-    }
-
-    line[offset++] = '\r';
-    line[offset++] = '\n';
-    line[offset] = '\0';
-
-    return Debug_Send((const uint8_t *)line, (uint16_t)offset);
+    (void)channels;
+    (void)channel_count;
+    return HAL_OK;
 }
 
 /**
@@ -232,16 +195,13 @@ HAL_StatusTypeDef Debug_VofaFireWater(const float *channels, uint8_t channel_cou
  */
 HAL_StatusTypeDef Debug_VofaImu6Axis(float accel_x_g, float accel_y_g, float accel_z_g, float gyro_x_dps, float gyro_y_dps, float gyro_z_dps)
 {
-    float channels[6];
-
-    channels[0] = accel_x_g;
-    channels[1] = accel_y_g;
-    channels[2] = accel_z_g;
-    channels[3] = gyro_x_dps;
-    channels[4] = gyro_y_dps;
-    channels[5] = gyro_z_dps;
-
-    return Debug_VofaJustFloat(channels, 6U);
+    (void)accel_x_g;
+    (void)accel_y_g;
+    (void)accel_z_g;
+    (void)gyro_x_dps;
+    (void)gyro_y_dps;
+    (void)gyro_z_dps;
+    return HAL_OK;
 }
 
 #if defined(__CC_ARM)
@@ -273,9 +233,8 @@ void _sys_exit(int status)
  */
 int fputc(int character, FILE *stream)
 {
-    uint8_t data = (uint8_t)character;
-
+    /* 标准库 printf 仍关闭，避免半主机或逐字节发送打乱 dump。 */
+    (void)character;
     (void)stream;
-    (void)HAL_UART_Transmit(DEBUG_UART, &data, 1U, DEBUG_TIMEOUT_MS);
     return character;
 }

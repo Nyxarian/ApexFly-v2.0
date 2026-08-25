@@ -4,9 +4,11 @@
  *
  * 只有本模块的任务碰 SPI3 / W25Q64。电机任务只 SubmitSample，电台任务只 RequestSave。
  * 不搬老 app_blackbox，不写水平零点，不实现六面校准。
- * 日志按 Session 切开，每场开头钉死当时 26 项 PID；时间先用相对毫秒，UTC 占位 0。
- * 写满日志区就停记，避免盖掉还没导出的开头。
- * USART3：dump [N] 只出校验通过的新场次 CSV；dumpall [N] 原样打日志区 64 字节十六进制（含老数据）。N=0 或 ALL 表示全部。
+ * 日志按 Session 切开，每场开头钉死旧 26 项姿态参数和新增高度参数。
+ * 样本仍用相对毫秒；解锁时刻的 UTC 写在高度参数记录里，上锁时刻的 UTC 写在场次尾。
+ * 没收到合法 RMC 时这两处都写 0。导出时把 Unix 秒换成北京时间。
+ * 日志区写满后从起点覆盖，写指针记在 0x003000；dump [N] 从当前写指针往回取最近 N 条，不是从 Flash 物理末尾取。
+ * USART3：dump [N] 只出校验通过的新场次 CSV；dumpall [N] 原样打最近 N 条 64 字节十六进制。N=0 或 ALL 表示全部有效日志。
  */
 
 #ifndef BLACKBOX_H
@@ -48,6 +50,18 @@ typedef struct
     uint16_t throttle_us;
     /* 四路电机脉宽，单位微秒。 */
     uint16_t motor_us[4];
+    /* 卡尔曼离地高度，单位厘米。 */
+    int16_t altitude_cm;
+    /* 卡尔曼垂直速度，单位厘米每秒。 */
+    int16_t vz_cms;
+    /* 杆位和高度保持生成的目标垂速，单位厘米每秒。 */
+    int16_t target_vz_cms;
+    /* 垂速 PID 对悬停油门的修正，单位微秒。 */
+    int16_t vz_correction_us;
+    /* 本拍使用的可调悬停油门，单位微秒。 */
+    uint16_t hover_pwm_us;
+    /* AltitudeControlState_t 的数值，用于判断起飞斜坡和失效保持。 */
+    uint8_t altitude_state;
     /* 0 上锁，1 解锁。 */
     uint8_t armed;
     /* 0 失联，1 链路通。 */
@@ -69,6 +83,12 @@ bool Blackbox_IsReady(void);
  * @brief 当前正在记一场解锁日志。
  */
 bool Blackbox_IsRecording(void);
+
+/**
+ * @brief 正在通过 USART3 导出 dump / dumpall。
+ * @return true 表示姿态调试任务应暂停打印，避免插进 CSV。
+ */
+bool Blackbox_IsDumping(void);
 
 /**
  * @brief 把当前 RAM PID 排队写入双备份槽。电台任务调用，本函数不擦 Flash。

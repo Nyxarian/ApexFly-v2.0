@@ -3,14 +3,14 @@
 交互照老工程 `ApexFly\BlackboxReader`：先连接串口，再读取，有进度条、重试和停止。  
 协议改成 v2.0：USART3 发 `dump` / `dumpall`，不再发老的 `BB DUMP ALL`。
 
-老 Python 窗口 `BlackboxDump` 已停用，不要再用。
+只使用本目录下的 `ApexFlyBlackboxReader.exe`。不要用 `bin\` 里的旧副本，也不要再用老 Python 窗口 `BlackboxDump`。
 
 ## 准备
 
 1. Keil 烧录**本仓库最新飞机固件**（带 `dump` / `dumpall` 和进度行）。
 2. 飞机上电并**上锁**，电机停。
 3. USB 转串口接 USART3，`115200 8N1`。**关掉 VOFA 和其他串口助手**。
-4. 双击 `ApexFlyBlackboxReader.exe` 打开窗口。不要点 `run.bat`（那个只是黑窗口闪一下再启动 exe）。
+4. 双击本目录的 `ApexFlyBlackboxReader.exe` 打开窗口。`run.bat` 也会启动同一个文件。
 
 ## 窗口用法
 

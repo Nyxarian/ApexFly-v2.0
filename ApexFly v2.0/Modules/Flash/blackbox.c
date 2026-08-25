@@ -6,19 +6,22 @@
  * 0x000000 参数槽 A，4KB
  * 0x001000 参数槽 B，4KB
  * 0x002000 保留（老六面校准，不读不写）
+ * 0x003000 日志写指针索引，4KB
  * 0x004000 日志起点
  * 最后 4KB 自检扇区，不拿来记飞
  *
- * 日志记录固定 64 字节。写满则停记，不环写。
+ * 日志记录固定 64 字节。写满后回到 0x004000 覆盖最老的数据，写指针保存在 0x003000。
+ * dump [N] 从当前写指针往回取最近 N 条，不是从芯片物理末尾取。
  * 场次头里的 PID 用 q100（百分之一）钉死当时那套参，方便导出后对上波形。
+ * 解锁 UTC 写在高度参数记录的保留区，上锁 UTC 写在场次尾；样本仍是本场相对毫秒。
  * USART3 轮询收 dump / dumpall / help；SAVE / 日志写入只在本任务做。
- * dump 只打校验通过的新场次 CSV；dumpall 把日志区每条 64 字节原样打成十六进制，含老数据。
  */
 
 #include "blackbox.h"
 
 #include "apex_protocol.h"
 #include "debug.h"
+#include "gps.h"
 #include "main.h"
 #include "pid_table.h"
 #include "spi.h"
@@ -33,17 +36,23 @@
 
 #define BLACKBOX_PARAMETER_SECTOR_A 0x000000UL
 #define BLACKBOX_PARAMETER_SECTOR_B 0x001000UL
+#define BLACKBOX_LOG_INDEX_ADDRESS 0x003000UL
 #define BLACKBOX_LOG_START_ADDRESS 0x004000UL
 #define BLACKBOX_TEST_SECTOR_ADDRESS (W25Q64_TOTAL_SIZE_BYTES - W25Q64_SECTOR_SIZE_BYTES)
 #define BLACKBOX_LOG_END_ADDRESS BLACKBOX_TEST_SECTOR_ADDRESS
+#define BLACKBOX_LOG_INDEX_MAGIC 0x424C5849UL /* "BLXI" */
+#define BLACKBOX_LOG_INDEX_RECORD_SIZE 32U
 
 #define BLACKBOX_PARAMETER_MAGIC 0x50445032UL /* "PDP2"，与老工程 magic 区分。 */
-#define BLACKBOX_PARAMETER_SCHEMA 1U
+#define BLACKBOX_PARAMETER_SCHEMA 2U
+#define BLACKBOX_PARAMETER_LEGACY_SCHEMA 1U
+#define BLACKBOX_SESSION_PID_PARAMETER_COUNT APEX_PID_V6_PARAMETER_COUNT
 #define BLACKBOX_RECORD_MAGIC 0x424C5832UL /* "BLX2" */
-#define BLACKBOX_RECORD_SCHEMA 1U
+#define BLACKBOX_RECORD_SCHEMA 3U
 #define BLACKBOX_RECORD_TYPE_SESSION_BEGIN 1U
 #define BLACKBOX_RECORD_TYPE_SAMPLE 2U
 #define BLACKBOX_RECORD_TYPE_SESSION_END 3U
+#define BLACKBOX_RECORD_TYPE_ALTITUDE_PARAMS 4U
 #define BLACKBOX_RECORD_SIZE 64U
 #define BLACKBOX_RECORD_CRC_OFFSET 60U
 #define BLACKBOX_SAMPLE_QUEUE_LENGTH 32U
@@ -65,6 +74,28 @@ typedef struct
     uint16_t reserved;
 } BlackboxParameterRecord_t;
 
+typedef struct
+{
+    uint32_t magic;
+    uint16_t schema;
+    uint16_t parameter_count;
+    uint32_t generation;
+    int32_t values_q10000[APEX_PID_V6_PARAMETER_COUNT];
+    uint16_t crc16;
+    uint16_t reserved;
+} BlackboxLegacyParameterRecord_t;
+
+typedef struct
+{
+    uint32_t magic;
+    uint32_t write_address;
+    uint16_t next_session_id;
+    uint16_t wrapped;
+    uint32_t generation;
+    uint16_t crc16;
+    uint16_t reserved;
+} BlackboxLogIndexRecord_t;
+
 #pragma pack(push, 1)
 typedef struct
 {
@@ -72,10 +103,24 @@ typedef struct
     uint8_t type;
     uint8_t schema;
     uint16_t session_id;
-    int16_t pid_q100[APEX_PID_PARAMETER_COUNT];
+    int16_t pid_q100[BLACKBOX_SESSION_PID_PARAMETER_COUNT];
     uint16_t crc16;
     uint16_t reserved;
 } BlackboxSessionBeginRecord_t;
+
+typedef struct
+{
+    uint32_t magic;
+    uint8_t type;
+    uint8_t schema;
+    uint16_t session_id;
+    int32_t altitude_q10000[4];
+    /* 解锁瞬间的 UTC Unix 秒。没有合法 RMC 时为 0。老记录该处是 0。 */
+    uint32_t utc_seconds;
+    uint8_t reserved0[32];
+    uint16_t crc16;
+    uint16_t reserved1;
+} BlackboxAltitudeParamsRecord_t;
 
 typedef struct
 {
@@ -95,9 +140,16 @@ typedef struct
     int16_t yaw_corr_us;
     uint16_t throttle_us;
     uint16_t motor_us[4];
+    int16_t altitude_cm;
+    int16_t vz_cms;
+    /* 保持 19 列 schema 2 的 armed/connected 字节位置；更早 17 列布局由导出器单独兼容。 */
     uint8_t armed;
     uint8_t connected;
-    uint8_t pad[18];
+    int16_t target_vz_cms;
+    int16_t vz_correction_us;
+    uint16_t hover_pwm_us;
+    uint8_t altitude_state;
+    uint8_t pad[7];
     uint16_t crc16;
     uint16_t reserved1;
 } BlackboxSampleRecord_t;
@@ -122,6 +174,7 @@ typedef union
 {
     uint8_t bytes[BLACKBOX_RECORD_SIZE];
     BlackboxSessionBeginRecord_t begin;
+    BlackboxAltitudeParamsRecord_t altitude;
     BlackboxSampleRecord_t sample;
     BlackboxSessionEndRecord_t end;
 } BlackboxFlashRecord_t;
@@ -159,24 +212,30 @@ static volatile bool blackbox_has_saved;
 static volatile uint32_t blackbox_dropped_samples;
 static uint32_t blackbox_log_write_address;
 static uint32_t blackbox_parameter_generation;
+static uint32_t blackbox_log_index_generation;
+static bool blackbox_log_wrapped;
 static uint16_t blackbox_next_session_id;
 static uint16_t blackbox_active_session_id;
 static uint32_t blackbox_session_start_tick;
 static uint16_t blackbox_session_sample_count;
+static uint32_t blackbox_session_begin_utc_seconds;
 static int32_t blackbox_saved_values[APEX_PID_PARAMETER_COUNT];
 static char blackbox_command[BLACKBOX_COMMAND_BUFFER_SIZE];
 static uint8_t blackbox_command_length;
 
 typedef char BlackboxParameterRecordMustFit[(sizeof(BlackboxParameterRecord_t) <= W25Q64_SECTOR_SIZE_BYTES) ? 1 : -1];
 typedef char BlackboxSessionBeginMustBe64[(sizeof(BlackboxSessionBeginRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
+typedef char BlackboxAltitudeParamsMustBe64[(sizeof(BlackboxAltitudeParamsRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxSampleMustBe64[(sizeof(BlackboxSampleRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxSessionEndMustBe64[(sizeof(BlackboxSessionEndRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxFlashRecordMustBe64[(sizeof(BlackboxFlashRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
+typedef char BlackboxLogIndexMustFit[(sizeof(BlackboxLogIndexRecord_t) <= BLACKBOX_LOG_INDEX_RECORD_SIZE) ? 1 : -1];
 
 static volatile bool blackbox_abort_dump;
 static bool blackbox_dumping;
 
 static void Blackbox_PollUartForStop(void);
+static bool Blackbox_WriteLogIndex(void);
 
 static int16_t Blackbox_ClampI16(int32_t value)
 {
@@ -203,6 +262,30 @@ static uint32_t Blackbox_ReadU32(const uint8_t *bytes, uint8_t offset)
     value |= (uint32_t)bytes[offset + 2U] << 16U;
     value |= (uint32_t)bytes[offset + 3U] << 24U;
     return value;
+}
+
+static int16_t Blackbox_ReadI16(const uint8_t *bytes, uint8_t offset)
+{
+    return (int16_t)Blackbox_ReadU16(bytes, offset);
+}
+
+static void Blackbox_FormatBeijingTime(uint32_t utc_seconds, char *text, uint16_t size)
+{
+    uint16_t year;
+    uint8_t month;
+    uint8_t day;
+    uint8_t hour;
+    uint8_t minute;
+    uint8_t second;
+
+    if ((text == NULL) || (size == 0U)) return;
+    if (utc_seconds == 0U)
+    {
+        (void)snprintf(text, size, "NA");
+        return;
+    }
+    GPS_UnixSecondsToCalendar(utc_seconds + 8UL * 3600UL, &year, &month, &day, &hour, &minute, &second);
+    (void)snprintf(text, size, "%04u-%02u-%02uT%02u:%02u:%02u", year, month, day, hour, minute, second);
 }
 
 static void Blackbox_FinalizeRecord(uint8_t *bytes)
@@ -257,18 +340,34 @@ static bool Blackbox_SaveSlot(uint32_t address, uint32_t generation, const int32
 static bool Blackbox_ReadSlot(uint32_t address, BlackboxParameterCandidate_t *candidate)
 {
     BlackboxParameterRecord_t record;
+    BlackboxLegacyParameterRecord_t legacy;
     uint16_t crc;
 
     memset(candidate, 0, sizeof(*candidate));
+    memset(&record, 0, sizeof(record));
     if (W25Q64_Read(&blackbox_flash, address, (uint8_t *)&record, sizeof(record)) != W25Q64_STATUS_OK) return false;
     if (record.magic != BLACKBOX_PARAMETER_MAGIC) return false;
-    if (record.schema != BLACKBOX_PARAMETER_SCHEMA) return false;
-    if (record.parameter_count != APEX_PID_PARAMETER_COUNT) return false;
-    crc = ApexProtocol_Crc16((const uint8_t *)&record, (uint16_t)(sizeof(record) - 4U));
-    if (crc != record.crc16) return false;
+
+    if ((record.schema == BLACKBOX_PARAMETER_SCHEMA) && (record.parameter_count == APEX_PID_PARAMETER_COUNT))
+    {
+        crc = ApexProtocol_Crc16((const uint8_t *)&record, (uint16_t)(sizeof(record) - 4U));
+        if (crc != record.crc16) return false;
+        candidate->generation = record.generation;
+        memcpy(candidate->values_q10000, record.values_q10000, sizeof(candidate->values_q10000));
+    }
+    else if ((record.schema == BLACKBOX_PARAMETER_LEGACY_SCHEMA) && (record.parameter_count == APEX_PID_V6_PARAMETER_COUNT))
+    {
+        /* 旧 26 项记录的 CRC 在旧结构尾部，按旧长度校验后再补入四项高度默认值。 */
+        memcpy(&legacy, &record, sizeof(legacy));
+        crc = ApexProtocol_Crc16((const uint8_t *)&legacy, (uint16_t)(sizeof(legacy) - 4U));
+        if (crc != legacy.crc16) return false;
+        PidTable_ExportSnapshot(candidate->values_q10000);
+        memcpy(candidate->values_q10000, legacy.values_q10000, sizeof(legacy.values_q10000));
+        candidate->generation = legacy.generation;
+    }
+    else return false;
+
     candidate->valid = true;
-    candidate->generation = record.generation;
-    memcpy(candidate->values_q10000, record.values_q10000, sizeof(candidate->values_q10000));
     return true;
 }
 
@@ -296,6 +395,143 @@ static bool Blackbox_ApplyBestSlot(void)
     return true;
 }
 
+static uint32_t Blackbox_LogCapacityRecords(void)
+{
+    return (BLACKBOX_LOG_END_ADDRESS - BLACKBOX_LOG_START_ADDRESS) / BLACKBOX_RECORD_SIZE;
+}
+
+static uint32_t Blackbox_NormalizedWriteAddress(void)
+{
+    if (blackbox_log_write_address >= BLACKBOX_LOG_END_ADDRESS) return BLACKBOX_LOG_START_ADDRESS;
+    if (blackbox_log_write_address < BLACKBOX_LOG_START_ADDRESS) return BLACKBOX_LOG_START_ADDRESS;
+    return blackbox_log_write_address;
+}
+
+static uint32_t Blackbox_LogUsedRecords(void)
+{
+    uint32_t write_address = Blackbox_NormalizedWriteAddress();
+    if (blackbox_log_wrapped) return Blackbox_LogCapacityRecords();
+    return (write_address - BLACKBOX_LOG_START_ADDRESS) / BLACKBOX_RECORD_SIZE;
+}
+
+static uint32_t Blackbox_AdvanceLogAddress(uint32_t address, uint32_t record_count)
+{
+    uint32_t capacity_bytes = BLACKBOX_LOG_END_ADDRESS - BLACKBOX_LOG_START_ADDRESS;
+    uint32_t offset = (address - BLACKBOX_LOG_START_ADDRESS) + (record_count * BLACKBOX_RECORD_SIZE);
+    return BLACKBOX_LOG_START_ADDRESS + (offset % capacity_bytes);
+}
+
+static uint32_t Blackbox_RewindLogAddress(uint32_t address, uint32_t record_count)
+{
+    uint32_t capacity_bytes = BLACKBOX_LOG_END_ADDRESS - BLACKBOX_LOG_START_ADDRESS;
+    uint32_t offset = address - BLACKBOX_LOG_START_ADDRESS;
+    uint32_t rewind_bytes = record_count * BLACKBOX_RECORD_SIZE;
+    rewind_bytes %= capacity_bytes;
+    if (offset >= rewind_bytes) return BLACKBOX_LOG_START_ADDRESS + (offset - rewind_bytes);
+    return BLACKBOX_LOG_START_ADDRESS + (capacity_bytes - (rewind_bytes - offset));
+}
+
+static bool Blackbox_WriteLogIndex(void)
+{
+    BlackboxLogIndexRecord_t record;
+    uint8_t bytes[BLACKBOX_LOG_INDEX_RECORD_SIZE];
+
+    memset(&record, 0, sizeof(record));
+    memset(bytes, 0xFF, sizeof(bytes));
+    record.magic = BLACKBOX_LOG_INDEX_MAGIC;
+    record.write_address = blackbox_log_write_address;
+    record.next_session_id = blackbox_next_session_id;
+    record.wrapped = blackbox_log_wrapped ? 1U : 0U;
+    record.generation = blackbox_log_index_generation + 1U;
+    memcpy(bytes, &record, sizeof(record));
+    {
+        uint16_t crc = ApexProtocol_Crc16(bytes, 16U);
+        bytes[16] = (uint8_t)crc;
+        bytes[17] = (uint8_t)(crc >> 8U);
+    }
+    if (W25Q64_EraseSector(&blackbox_flash, BLACKBOX_LOG_INDEX_ADDRESS) != W25Q64_STATUS_OK) return false;
+    if (W25Q64_Write(&blackbox_flash, BLACKBOX_LOG_INDEX_ADDRESS, bytes, sizeof(bytes)) != W25Q64_STATUS_OK) return false;
+    blackbox_log_index_generation = record.generation;
+    return true;
+}
+
+static bool Blackbox_LoadLogIndex(void)
+{
+    uint8_t bytes[BLACKBOX_LOG_INDEX_RECORD_SIZE];
+    uint32_t magic;
+    uint32_t write_address;
+    uint16_t next_session;
+    uint16_t wrapped;
+    uint32_t generation;
+    uint16_t crc;
+    uint16_t stored;
+
+    if (W25Q64_Read(&blackbox_flash, BLACKBOX_LOG_INDEX_ADDRESS, bytes, sizeof(bytes)) != W25Q64_STATUS_OK) return false;
+    magic = Blackbox_ReadU32(bytes, 0U);
+    if (magic != BLACKBOX_LOG_INDEX_MAGIC) return false;
+    crc = ApexProtocol_Crc16(bytes, 16U);
+    stored = Blackbox_ReadU16(bytes, 16U);
+    if (crc != stored) return false;
+    write_address = Blackbox_ReadU32(bytes, 4U);
+    next_session = Blackbox_ReadU16(bytes, 8U);
+    wrapped = Blackbox_ReadU16(bytes, 10U);
+    generation = Blackbox_ReadU32(bytes, 12U);
+    if ((write_address < BLACKBOX_LOG_START_ADDRESS) || (write_address > BLACKBOX_LOG_END_ADDRESS)) return false;
+    if ((write_address % BLACKBOX_RECORD_SIZE) != 0U) return false;
+    blackbox_log_write_address = write_address;
+    blackbox_next_session_id = (next_session == 0U) ? 1U : next_session;
+    blackbox_log_wrapped = (wrapped != 0U);
+    blackbox_log_index_generation = generation;
+    return true;
+}
+
+static void Blackbox_RecoverWritePointer(void)
+{
+    uint8_t magic_bytes[8];
+    uint32_t address = Blackbox_NormalizedWriteAddress();
+    uint32_t sector_end;
+    uint32_t limit;
+    uint32_t scanned;
+
+    /* 环写后只在当前扇区里补扫：后面要么是刚擦过的 0xFF，要么是上一圈旧数据，不能整圈盲扫。 */
+    if (blackbox_log_wrapped)
+    {
+        sector_end = (address & ~(W25Q64_SECTOR_SIZE_BYTES - 1UL)) + W25Q64_SECTOR_SIZE_BYTES;
+        if (sector_end > BLACKBOX_LOG_END_ADDRESS) sector_end = BLACKBOX_LOG_END_ADDRESS;
+        if (sector_end <= address) return;
+        limit = (sector_end - address) / BLACKBOX_RECORD_SIZE;
+    }
+    else
+    {
+        limit = (BLACKBOX_LOG_END_ADDRESS - address) / BLACKBOX_RECORD_SIZE;
+    }
+
+    for (scanned = 0U; scanned < limit; scanned++)
+    {
+        if (W25Q64_Read(&blackbox_flash, address, magic_bytes, 8U) != W25Q64_STATUS_OK) return;
+        if (Blackbox_ReadU32(magic_bytes, 0U) == 0xFFFFFFFFUL) break;
+        if (Blackbox_ReadU32(magic_bytes, 0U) != BLACKBOX_RECORD_MAGIC) break;
+        if (magic_bytes[4] == BLACKBOX_RECORD_TYPE_SESSION_BEGIN)
+        {
+            uint16_t session_id = Blackbox_ReadU16(magic_bytes, 6U);
+            if ((session_id + 1U) > blackbox_next_session_id)
+            {
+                blackbox_next_session_id = (uint16_t)(session_id + 1U);
+                if (blackbox_next_session_id == 0U) blackbox_next_session_id = 1U;
+            }
+        }
+        address += BLACKBOX_RECORD_SIZE;
+        if (address >= BLACKBOX_LOG_END_ADDRESS)
+        {
+            address = BLACKBOX_LOG_START_ADDRESS;
+            blackbox_log_wrapped = true;
+            break;
+        }
+        if ((scanned & 0x0FU) == 0U) vTaskDelay(1);
+    }
+    blackbox_log_write_address = address;
+}
+
 static bool Blackbox_ScanLogEnd(void)
 {
     uint8_t magic_bytes[8];
@@ -305,6 +541,7 @@ static bool Blackbox_ScanLogEnd(void)
     uint32_t used_records = 0U;
 
     blackbox_log_write_address = BLACKBOX_LOG_START_ADDRESS;
+    blackbox_log_wrapped = false;
     for (address = BLACKBOX_LOG_START_ADDRESS; address + BLACKBOX_RECORD_SIZE <= BLACKBOX_LOG_END_ADDRESS; address += BLACKBOX_RECORD_SIZE)
     {
         /* 读 magic + type + schema + session_id，上电时按真实场次号续编，不再用记录数除 64 估。 */
@@ -322,6 +559,7 @@ static bool Blackbox_ScanLogEnd(void)
             /* 老固件或损坏数据不当新日志，从起点覆盖，避免扫整片 8MB。 */
             blackbox_log_write_address = BLACKBOX_LOG_START_ADDRESS;
             blackbox_next_session_id = 1U;
+            blackbox_log_wrapped = false;
             return true;
         }
         used_records++;
@@ -332,27 +570,35 @@ static bool Blackbox_ScanLogEnd(void)
         }
         if ((used_records & 0x0FU) == 0U) vTaskDelay(1);
     }
+    /* 日志区已满且还没有索引：写指针停在末尾，下一次写入再绕回起点。 */
     blackbox_log_write_address = BLACKBOX_LOG_END_ADDRESS;
+    blackbox_log_wrapped = true;
     blackbox_next_session_id = (uint16_t)(max_session + 1U);
     if (blackbox_next_session_id == 0U) blackbox_next_session_id = 1U;
     return true;
 }
 
-static bool Blackbox_LogHasSpace(void)
-{
-    return (blackbox_log_write_address + BLACKBOX_RECORD_SIZE) <= BLACKBOX_LOG_END_ADDRESS;
-}
-
 static bool Blackbox_AppendRecord(uint8_t *bytes)
 {
     Blackbox_FinalizeRecord(bytes);
-    if (!Blackbox_LogHasSpace()) return false;
+    if (blackbox_log_write_address >= BLACKBOX_LOG_END_ADDRESS)
+    {
+        blackbox_log_write_address = BLACKBOX_LOG_START_ADDRESS;
+        blackbox_log_wrapped = true;
+    }
     if ((blackbox_log_write_address % W25Q64_SECTOR_SIZE_BYTES) == 0U)
     {
         if (W25Q64_EraseSector(&blackbox_flash, blackbox_log_write_address) != W25Q64_STATUS_OK) return false;
+        /* 擦完当前扇区立刻记下写指针。掉电后只在本扇区内向前补扫到 0xFF。 */
+        (void)Blackbox_WriteLogIndex();
     }
     if (W25Q64_Write(&blackbox_flash, blackbox_log_write_address, bytes, BLACKBOX_RECORD_SIZE) != W25Q64_STATUS_OK) return false;
     blackbox_log_write_address += BLACKBOX_RECORD_SIZE;
+    if (blackbox_log_write_address >= BLACKBOX_LOG_END_ADDRESS)
+    {
+        blackbox_log_write_address = BLACKBOX_LOG_START_ADDRESS;
+        blackbox_log_wrapped = true;
+    }
     return true;
 }
 
@@ -368,7 +614,17 @@ static bool Blackbox_WriteSessionBegin(void)
     record.begin.type = BLACKBOX_RECORD_TYPE_SESSION_BEGIN;
     record.begin.schema = BLACKBOX_RECORD_SCHEMA;
     record.begin.session_id = blackbox_active_session_id;
-    for (index = 0U; index < APEX_PID_PARAMETER_COUNT; index++) record.begin.pid_q100[index] = Blackbox_Q10000ToQ100(values[index]);
+    for (index = 0U; index < BLACKBOX_SESSION_PID_PARAMETER_COUNT; index++) record.begin.pid_q100[index] = Blackbox_Q10000ToQ100(values[index]);
+    if (!Blackbox_AppendRecord(record.bytes)) return false;
+
+    memset(&record, 0, sizeof(record));
+    record.altitude.magic = BLACKBOX_RECORD_MAGIC;
+    record.altitude.type = BLACKBOX_RECORD_TYPE_ALTITUDE_PARAMS;
+    record.altitude.schema = BLACKBOX_RECORD_SCHEMA;
+    record.altitude.session_id = blackbox_active_session_id;
+    for (index = 0U; index < 4U; index++) record.altitude.altitude_q10000[index] = values[APEX_PID_VERTICAL_SPEED_KP + index];
+    if (!GPS_GetUtcTime(&record.altitude.utc_seconds)) record.altitude.utc_seconds = 0U;
+    blackbox_session_begin_utc_seconds = record.altitude.utc_seconds;
     return Blackbox_AppendRecord(record.bytes);
 }
 
@@ -383,7 +639,7 @@ static bool Blackbox_WriteSessionEnd(void)
     record.end.session_id = blackbox_active_session_id;
     record.end.t_ms = (uint32_t)(xTaskGetTickCount() - blackbox_session_start_tick);
     record.end.sample_count = blackbox_session_sample_count;
-    record.end.utc_seconds = 0U;
+    if (!GPS_GetUtcTime(&record.end.utc_seconds)) record.end.utc_seconds = 0U;
     return Blackbox_AppendRecord(record.bytes);
 }
 
@@ -408,6 +664,12 @@ static bool Blackbox_WriteSample(const BlackboxSample_t *sample)
     record.sample.yaw_corr_us = sample->yaw_corr_us;
     record.sample.throttle_us = sample->throttle_us;
     memcpy(record.sample.motor_us, sample->motor_us, sizeof(record.sample.motor_us));
+    record.sample.altitude_cm = sample->altitude_cm;
+    record.sample.vz_cms = sample->vz_cms;
+    record.sample.target_vz_cms = sample->target_vz_cms;
+    record.sample.vz_correction_us = sample->vz_correction_us;
+    record.sample.hover_pwm_us = sample->hover_pwm_us;
+    record.sample.altitude_state = sample->altitude_state;
     record.sample.armed = sample->armed;
     record.sample.connected = sample->connected;
     if (!Blackbox_AppendRecord(record.bytes)) return false;
@@ -436,17 +698,16 @@ static void Blackbox_HandleSave(void)
 
 static void Blackbox_HandleArm(void)
 {
-    if (blackbox_recording) (void)Blackbox_WriteSessionEnd();
-    if (!Blackbox_LogHasSpace())
+    if (blackbox_recording)
     {
-        blackbox_recording = false;
-        Debug_Printf("[BB] log full, not recording.\r\n");
-        return;
+        (void)Blackbox_WriteSessionEnd();
+        (void)Blackbox_WriteLogIndex();
     }
     blackbox_active_session_id = blackbox_next_session_id;
     if (blackbox_next_session_id < 0xFFFFU) blackbox_next_session_id++;
     blackbox_session_start_tick = xTaskGetTickCount();
     blackbox_session_sample_count = 0U;
+    blackbox_session_begin_utc_seconds = 0U;
     if (!Blackbox_WriteSessionBegin())
     {
         blackbox_recording = false;
@@ -454,27 +715,44 @@ static void Blackbox_HandleArm(void)
         return;
     }
     blackbox_recording = true;
-    Debug_Printf("[BB] session %u begin.\r\n", (unsigned int)blackbox_active_session_id);
+    if (blackbox_session_begin_utc_seconds == 0U) Debug_Printf("[BB] session %u begin utc=NA.\r\n", (unsigned int)blackbox_active_session_id);
+    else
+    {
+        char beijing_time[24];
+        Blackbox_FormatBeijingTime(blackbox_session_begin_utc_seconds, beijing_time, sizeof(beijing_time));
+        Debug_Printf("[BB] session %u begin utc=%lu bjt=%s.\r\n", (unsigned int)blackbox_active_session_id, (unsigned long)blackbox_session_begin_utc_seconds, beijing_time);
+    }
 }
 
 static void Blackbox_HandleDisarm(void)
 {
+    uint32_t utc_seconds = 0U;
+    char beijing_time[24];
+
     if (!blackbox_recording) return;
+    if (!GPS_GetUtcTime(&utc_seconds)) utc_seconds = 0U;
     if (!Blackbox_WriteSessionEnd()) Debug_Printf("[BB] session end failed.\r\n");
-    else Debug_Printf("[BB] session %u end samples=%u.\r\n", (unsigned int)blackbox_active_session_id, (unsigned int)blackbox_session_sample_count);
+    else
+    {
+        Blackbox_FormatBeijingTime(utc_seconds, beijing_time, sizeof(beijing_time));
+        Debug_Printf("[BB] session %u end samples=%u bjt=%s.\r\n", (unsigned int)blackbox_active_session_id, (unsigned int)blackbox_session_sample_count, beijing_time);
+    }
+    (void)Blackbox_WriteLogIndex();
     blackbox_recording = false;
 }
 
-static void Blackbox_PrintPidHeader(uint16_t session_id, const int16_t *pid_q100)
+static void Blackbox_PrintPidHeader(uint16_t session_id, uint32_t utc_seconds, const int16_t *pid_q100)
 {
     char line[400];
+    char beijing_time[24];
     int length;
     uint8_t index;
 
-    Debug_Printf("# session=%u t0_utc=000000\r\n", (unsigned int)session_id);
+    Blackbox_FormatBeijingTime(utc_seconds, beijing_time, sizeof(beijing_time));
+    Debug_Printf("# session=%u t0_utc=%s unix=%lu\r\n", (unsigned int)session_id, beijing_time, (unsigned long)utc_seconds);
     /* 整行一次发出，避免电机任务的 [ATT] 插进 PID 数字中间。 */
     length = snprintf(line, sizeof(line), "# pid");
-    for (index = 0U; (index < APEX_PID_PARAMETER_COUNT) && (length > 0) && (length < (int)(sizeof(line) - 24)); index++)
+    for (index = 0U; (index < BLACKBOX_SESSION_PID_PARAMETER_COUNT) && (length > 0) && (length < (int)(sizeof(line) - 24)); index++)
     {
         length += snprintf(&line[length], sizeof(line) - (size_t)length, " %u=%.2f", (unsigned int)index, (double)pid_q100[index] / 100.0);
     }
@@ -488,25 +766,67 @@ static void Blackbox_PrintPidHeader(uint16_t session_id, const int16_t *pid_q100
         }
         (void)Debug_Send((const uint8_t *)line, (uint16_t)length);
     }
-    Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,armed,conn\r\n");
+    Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,vz_sp_cms,vz_corr_us,hover_us,alt_state,armed,conn\r\n");
+}
+
+static void Blackbox_PrintSample(const BlackboxFlashRecord_t *record)
+{
+    int16_t altitude_cm = 0;
+    int16_t vz_cms = 0;
+    int16_t target_vz_cms = 0;
+    int16_t vz_correction_us = 0;
+    uint16_t hover_pwm_us = 0U;
+    uint8_t altitude_state = 0U;
+    uint8_t armed;
+    uint8_t connected;
+
+    if (record->sample.schema >= BLACKBOX_RECORD_SCHEMA)
+    {
+        altitude_cm = record->sample.altitude_cm;
+        vz_cms = record->sample.vz_cms;
+        target_vz_cms = record->sample.target_vz_cms;
+        vz_correction_us = record->sample.vz_correction_us;
+        hover_pwm_us = record->sample.hover_pwm_us;
+        altitude_state = record->sample.altitude_state;
+        armed = record->sample.armed;
+        connected = record->sample.connected;
+    }
+    else if (record->bytes[44] == 1U)
+    {
+        /* 19 列旧样本只在解锁场次写入，armed 固定在偏移 44；最早 17 列该处是清零填充。 */
+        altitude_cm = Blackbox_ReadI16(record->bytes, 40U);
+        vz_cms = Blackbox_ReadI16(record->bytes, 42U);
+        armed = record->bytes[44];
+        connected = record->bytes[45];
+    }
+    else
+    {
+        /* 最早 17 列布局：状态位直接位于四路电机之后。 */
+        armed = record->bytes[40];
+        connected = record->bytes[41];
+    }
+
+    Debug_Printf("%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%u,%u,%u,%u,%u,%d,%d,%d,%d,%u,%u,%u,%u\r\n", (unsigned long)record->sample.t_ms, (double)record->sample.roll_cdeg / 100.0, (double)record->sample.pitch_cdeg / 100.0, (double)record->sample.yaw_cdeg / 100.0, (double)record->sample.roll_rate_cdps / 100.0, (double)record->sample.pitch_rate_cdps / 100.0, (double)record->sample.yaw_rate_cdps / 100.0, (int)record->sample.roll_corr_us, (int)record->sample.pitch_corr_us, (int)record->sample.yaw_corr_us, (unsigned int)record->sample.throttle_us, (unsigned int)record->sample.motor_us[0], (unsigned int)record->sample.motor_us[1], (unsigned int)record->sample.motor_us[2], (unsigned int)record->sample.motor_us[3], (int)altitude_cm, (int)vz_cms, (int)target_vz_cms, (int)vz_correction_us, (unsigned int)hover_pwm_us, (unsigned int)altitude_state, (unsigned int)armed, (unsigned int)connected);
 }
 
 static uint32_t Blackbox_DumpStartAddress(uint32_t max_records)
 {
-    uint32_t total;
-    uint32_t skip;
+    uint32_t used = Blackbox_LogUsedRecords();
+    uint32_t write_address = Blackbox_NormalizedWriteAddress();
+    uint32_t count = used;
 
-    if (blackbox_log_write_address <= BLACKBOX_LOG_START_ADDRESS) return BLACKBOX_LOG_START_ADDRESS;
-    total = (blackbox_log_write_address - BLACKBOX_LOG_START_ADDRESS) / BLACKBOX_RECORD_SIZE;
-    if ((max_records == 0U) || (max_records >= total)) return BLACKBOX_LOG_START_ADDRESS;
-    skip = total - max_records;
-    return BLACKBOX_LOG_START_ADDRESS + (skip * BLACKBOX_RECORD_SIZE);
+    if (used == 0U) return write_address;
+    if ((max_records > 0U) && (max_records < used)) count = max_records;
+    /* 整圈有效时，写指针本身就是最老的一条。 */
+    if (count == Blackbox_LogCapacityRecords()) return write_address;
+    return Blackbox_RewindLogAddress(write_address, count);
 }
 
-static uint32_t Blackbox_DumpRecordCount(uint32_t start_address)
+static uint32_t Blackbox_DumpRecordCount(uint32_t max_records)
 {
-    if (blackbox_log_write_address <= start_address) return 0U;
-    return (blackbox_log_write_address - start_address) / BLACKBOX_RECORD_SIZE;
+    uint32_t used = Blackbox_LogUsedRecords();
+    if ((max_records == 0U) || (max_records >= used)) return used;
+    return max_records;
 }
 
 static void Blackbox_DumpLogs(uint32_t max_records)
@@ -518,6 +838,9 @@ static void Blackbox_DumpLogs(uint32_t max_records)
     uint32_t scanned = 0U;
     uint32_t samples = 0U;
     uint32_t sessions = 0U;
+    uint16_t pending_session_id = 0U;
+    int16_t pending_pid_q100[BLACKBOX_SESSION_PID_PARAMETER_COUNT];
+    bool pending_session_header = false;
     bool in_session = false;
     bool printed_orphan_header = false;
 
@@ -529,9 +852,10 @@ static void Blackbox_DumpLogs(uint32_t max_records)
     blackbox_abort_dump = false;
     blackbox_dumping = true;
     start_address = Blackbox_DumpStartAddress(max_records);
-    total = Blackbox_DumpRecordCount(start_address);
-    Debug_Printf("[BB] dump start records=%lu addr=0x%08lX end=0x%08lX.\r\n", (unsigned long)total, (unsigned long)start_address, (unsigned long)blackbox_log_write_address);
-    for (address = start_address; address < blackbox_log_write_address; address += BLACKBOX_RECORD_SIZE)
+    total = Blackbox_DumpRecordCount(max_records);
+    Debug_Printf("[BB] dump start records=%lu addr=0x%08lX end=0x%08lX wrap=%u.\r\n", (unsigned long)total, (unsigned long)start_address, (unsigned long)blackbox_log_write_address, blackbox_log_wrapped ? 1U : 0U);
+    address = start_address;
+    while (scanned < total)
     {
         Blackbox_PollUartForStop();
         if (blackbox_abort_dump)
@@ -548,35 +872,68 @@ static void Blackbox_DumpLogs(uint32_t max_records)
         }
         scanned++;
         if ((scanned % 64U) == 0U) Debug_Printf("[BB] dump progress scanned=%lu total=%lu.\r\n", (unsigned long)scanned, (unsigned long)total);
-        if (Blackbox_ReadU32(record.bytes, 0U) == 0xFFFFFFFFUL) break;
-        if (!Blackbox_RecordValid(record.bytes)) continue;
+        if (Blackbox_ReadU32(record.bytes, 0U) == 0xFFFFFFFFUL)
+        {
+            address = Blackbox_AdvanceLogAddress(address, 1U);
+            continue;
+        }
+        if (!Blackbox_RecordValid(record.bytes))
+        {
+            address = Blackbox_AdvanceLogAddress(address, 1U);
+            continue;
+        }
         if (record.begin.type == BLACKBOX_RECORD_TYPE_SESSION_BEGIN)
         {
+            pending_session_id = record.begin.session_id;
+            memcpy(pending_pid_q100, record.begin.pid_q100, sizeof(pending_pid_q100));
+            pending_session_header = true;
             in_session = true;
             sessions++;
-            Blackbox_PrintPidHeader(record.begin.session_id, record.begin.pid_q100);
+        }
+        else if (record.altitude.type == BLACKBOX_RECORD_TYPE_ALTITUDE_PARAMS)
+        {
+            if (pending_session_header)
+            {
+                Blackbox_PrintPidHeader(pending_session_id, record.altitude.utc_seconds, pending_pid_q100);
+                pending_session_header = false;
+            }
+            Debug_Printf("# altitude vz_kp=%.2f vz_ki=%.2f vz_kd=%.2f hover_pwm=%.0f utc=%lu\r\n", (double)record.altitude.altitude_q10000[0] / 10000.0, (double)record.altitude.altitude_q10000[1] / 10000.0, (double)record.altitude.altitude_q10000[2] / 10000.0, (double)record.altitude.altitude_q10000[3] / 10000.0, (unsigned long)record.altitude.utc_seconds);
         }
         else if (record.sample.type == BLACKBOX_RECORD_TYPE_SAMPLE)
         {
+            if (pending_session_header)
+            {
+                Blackbox_PrintPidHeader(pending_session_id, 0U, pending_pid_q100);
+                pending_session_header = false;
+            }
             if (!in_session && !printed_orphan_header)
             {
-                Debug_Printf("# session=0 t0_utc=000000\r\n");
-                Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,armed,conn\r\n");
+                Debug_Printf("# session=0 t0_utc=NA unix=0\r\n");
+                Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,vz_sp_cms,vz_corr_us,hover_us,alt_state,armed,conn\r\n");
                 printed_orphan_header = true;
             }
             if (in_session || printed_orphan_header)
             {
                 samples++;
-                Debug_Printf("%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%u,%u,%u,%u,%u,%u,%u\r\n", (unsigned long)record.sample.t_ms, (double)record.sample.roll_cdeg / 100.0, (double)record.sample.pitch_cdeg / 100.0, (double)record.sample.yaw_cdeg / 100.0, (double)record.sample.roll_rate_cdps / 100.0, (double)record.sample.pitch_rate_cdps / 100.0, (double)record.sample.yaw_rate_cdps / 100.0, (int)record.sample.roll_corr_us, (int)record.sample.pitch_corr_us, (int)record.sample.yaw_corr_us, (unsigned int)record.sample.throttle_us, (unsigned int)record.sample.motor_us[0], (unsigned int)record.sample.motor_us[1], (unsigned int)record.sample.motor_us[2], (unsigned int)record.sample.motor_us[3], (unsigned int)record.sample.armed, (unsigned int)record.sample.connected);
+                Blackbox_PrintSample(&record);
             }
         }
         else if (record.end.type == BLACKBOX_RECORD_TYPE_SESSION_END)
         {
-            Debug_Printf("# end session=%u samples=%u t_ms=%lu utc=000000\r\n", (unsigned int)record.end.session_id, (unsigned int)record.end.sample_count, (unsigned long)record.end.t_ms);
+            char beijing_time[24];
+            if (pending_session_header)
+            {
+                Blackbox_PrintPidHeader(pending_session_id, 0U, pending_pid_q100);
+                pending_session_header = false;
+            }
+            Blackbox_FormatBeijingTime(record.end.utc_seconds, beijing_time, sizeof(beijing_time));
+            Debug_Printf("# end session=%u samples=%u t_ms=%lu t1_utc=%s unix=%lu\r\n", (unsigned int)record.end.session_id, (unsigned int)record.end.sample_count, (unsigned long)record.end.t_ms, beijing_time, (unsigned long)record.end.utc_seconds);
             in_session = false;
         }
+        address = Blackbox_AdvanceLogAddress(address, 1U);
         if ((scanned % 8U) == 0U) vTaskDelay(1);
     }
+    if (pending_session_header) Blackbox_PrintPidHeader(pending_session_id, 0U, pending_pid_q100);
     Debug_Printf("[BB] dump done scanned=%lu samples=%lu sessions=%lu.\r\n", (unsigned long)scanned, (unsigned long)samples, (unsigned long)sessions);
     blackbox_dumping = false;
 }
@@ -598,9 +955,10 @@ static void Blackbox_DumpAllRaw(uint32_t max_records)
     blackbox_abort_dump = false;
     blackbox_dumping = true;
     start_address = Blackbox_DumpStartAddress(max_records);
-    total = Blackbox_DumpRecordCount(start_address);
-    Debug_Printf("[BB] dumpall start records=%lu addr=0x%08lX end=0x%08lX.\r\n", (unsigned long)total, (unsigned long)start_address, (unsigned long)blackbox_log_write_address);
-    for (address = start_address; address < blackbox_log_write_address; address += BLACKBOX_RECORD_SIZE)
+    total = Blackbox_DumpRecordCount(max_records);
+    Debug_Printf("[BB] dumpall start records=%lu addr=0x%08lX end=0x%08lX wrap=%u.\r\n", (unsigned long)total, (unsigned long)start_address, (unsigned long)blackbox_log_write_address, blackbox_log_wrapped ? 1U : 0U);
+    address = start_address;
+    while (scanned < total)
     {
         Blackbox_PollUartForStop();
         if (blackbox_abort_dump)
@@ -622,6 +980,7 @@ static void Blackbox_DumpAllRaw(uint32_t max_records)
             Debug_Printf("%08lX %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\r\n", (unsigned long)(address + offset), record[offset], record[offset + 1U], record[offset + 2U], record[offset + 3U], record[offset + 4U], record[offset + 5U], record[offset + 6U], record[offset + 7U], record[offset + 8U], record[offset + 9U], record[offset + 10U], record[offset + 11U], record[offset + 12U], record[offset + 13U], record[offset + 14U], record[offset + 15U]);
         }
         if ((scanned % 16U) == 0U) Debug_Printf("[BB] dumpall progress scanned=%lu total=%lu.\r\n", (unsigned long)scanned, (unsigned long)total);
+        address = Blackbox_AdvanceLogAddress(address, 1U);
         if ((scanned % 8U) == 0U) vTaskDelay(1);
     }
     Debug_Printf("[BB] dumpall done scanned=%lu.\r\n", (unsigned long)scanned);
@@ -744,6 +1103,8 @@ static bool Blackbox_Initialize(void)
     blackbox_parameter_generation = 0U;
     blackbox_next_session_id = 1U;
     blackbox_log_write_address = BLACKBOX_LOG_START_ADDRESS;
+    blackbox_log_index_generation = 0U;
+    blackbox_log_wrapped = false;
     blackbox_command_length = 0U;
     if (blackbox_queue == NULL)
     {
@@ -762,13 +1123,20 @@ static bool Blackbox_Initialize(void)
     /* 先放行 SAVE，再扫日志，避免上电 SPI 长扫描拖死电机任务。 */
     blackbox_ready = true;
     vTaskDelay(pdMS_TO_TICKS(50U));
-    if (!Blackbox_ScanLogEnd())
+    if (Blackbox_LoadLogIndex())
+    {
+        Blackbox_RecoverWritePointer();
+        Debug_Printf("[BB] log index loaded wrap=%u.\r\n", blackbox_log_wrapped ? 1U : 0U);
+    }
+    else if (!Blackbox_ScanLogEnd())
     {
         Debug_Printf("[BB] log scan fail, start at 0x%08lX.\r\n", (unsigned long)BLACKBOX_LOG_START_ADDRESS);
         blackbox_log_write_address = BLACKBOX_LOG_START_ADDRESS;
         blackbox_next_session_id = 1U;
+        blackbox_log_wrapped = false;
     }
-    Debug_Printf("[BB] ready id=%02X%02X%02X next_session=%u log=0x%08lX.\r\n", (unsigned int)blackbox_flash.manufacturer_id, (unsigned int)blackbox_flash.memory_type, (unsigned int)blackbox_flash.capacity_id, (unsigned int)blackbox_next_session_id, (unsigned long)blackbox_log_write_address);
+    else (void)Blackbox_WriteLogIndex();
+    Debug_Printf("[BB] ready id=%02X%02X%02X next_session=%u log=0x%08lX wrap=%u.\r\n", (unsigned int)blackbox_flash.manufacturer_id, (unsigned int)blackbox_flash.memory_type, (unsigned int)blackbox_flash.capacity_id, (unsigned int)blackbox_next_session_id, (unsigned long)blackbox_log_write_address, blackbox_log_wrapped ? 1U : 0U);
     return true;
 }
 
@@ -780,6 +1148,11 @@ bool Blackbox_IsReady(void)
 bool Blackbox_IsRecording(void)
 {
     return blackbox_recording;
+}
+
+bool Blackbox_IsDumping(void)
+{
+    return blackbox_dumping;
 }
 
 bool Blackbox_RequestSave(void)
@@ -823,7 +1196,6 @@ void Blackbox_Task(void *argument)
     uint32_t next_status_tick;
 
     (void)argument;
-    Debug_Init();
     PidTable_Init();
     for (;;)
     {
@@ -852,7 +1224,7 @@ void Blackbox_Task(void *argument)
             Blackbox_PollUart();
             if ((int32_t)(xTaskGetTickCount() - next_status_tick) >= 0)
             {
-                Debug_Printf("[BB] rec=%u sess=%u wr=0x%08lX drop=%lu.\r\n", blackbox_recording ? 1U : 0U, (unsigned int)blackbox_active_session_id, (unsigned long)blackbox_log_write_address, (unsigned long)blackbox_dropped_samples);
+                Debug_Printf("[BB] rec=%u sess=%u wr=0x%08lX wrap=%u drop=%lu.\r\n", blackbox_recording ? 1U : 0U, (unsigned int)blackbox_active_session_id, (unsigned long)blackbox_log_write_address, blackbox_log_wrapped ? 1U : 0U, (unsigned long)blackbox_dropped_samples);
                 next_status_tick = (uint32_t)xTaskGetTickCount() + BLACKBOX_STATUS_PRINT_MS;
             }
         }

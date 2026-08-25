@@ -2,7 +2,7 @@
  * @file apex_protocol.h
  * @brief 遥控器与飞机端共用的二进制控制/遥测协议。
  *
- * 两端必须使用同一份文件。当前版本 0x06，与 CoreFly F2 Remoto 一致。
+ * 两端必须使用同一份文件。当前版本 0x07，与 CoreFly F2 Remoto 一致。
  * 帧中多字节数据均为小端，不直接发送 C 结构体，避免对齐差异。
  * 本文件只做编解码，不读写 LoRa，也不写电机。
  * 飞机 v2 尚未接入的遥测字段填 0。
@@ -20,19 +20,20 @@ extern "C" {
 
 #define APEX_PROTOCOL_HEADER_0 0xA5U
 #define APEX_PROTOCOL_HEADER_1 0x5AU
-#define APEX_PROTOCOL_VERSION 0x06U
-#define APEX_PROTOCOL_MAX_PAYLOAD_LENGTH 112U
+#define APEX_PROTOCOL_VERSION 0x07U
+#define APEX_PROTOCOL_MAX_PAYLOAD_LENGTH 128U
 #define APEX_PROTOCOL_MAX_FRAME_LENGTH (9U + APEX_PROTOCOL_MAX_PAYLOAD_LENGTH)
 #define APEX_PROTOCOL_CONTROL_PAYLOAD_LENGTH 10U
 #define APEX_PROTOCOL_TELEMETRY_PAYLOAD_LENGTH 31U
 #define APEX_PROTOCOL_PID_COMMAND_PAYLOAD_LENGTH 6U
 #define APEX_PID_LEGACY_PARAMETER_COUNT 15U
 #define APEX_PID_V5_PARAMETER_COUNT 21U
-#define APEX_PID_PARAMETER_COUNT 26U
+#define APEX_PID_V6_PARAMETER_COUNT 26U
+#define APEX_PID_PARAMETER_COUNT 30U
 #define APEX_PROTOCOL_PID_RESPONSE_PAYLOAD_LENGTH (4U + (APEX_PID_PARAMETER_COUNT * 4U))
 #define APEX_PID_VALUE_SCALE 10000L
 
-/* PID 回包包含序号、状态、操作类型、参数版本及全部 26 个参数；负载上限不足时必须在编译期报错，避免遥控器永久等待确认。 */
+/* PID 回包包含序号、状态、操作类型、参数版本及全部 30 个参数；负载上限不足时必须在编译期报错，避免遥控器永久等待确认。 */
 #if (APEX_PROTOCOL_PID_RESPONSE_PAYLOAD_LENGTH > APEX_PROTOCOL_MAX_PAYLOAD_LENGTH)
 #error "APEX_PROTOCOL_MAX_PAYLOAD_LENGTH is too small for the PID response."
 #endif
@@ -116,7 +117,13 @@ typedef enum
     /* Yaw航向角度环PID参数（GPS定点模式使用） */
     APEX_PID_YAW_ANGLE_KP,
     APEX_PID_YAW_ANGLE_KI,
-    APEX_PID_YAW_ANGLE_KD
+    APEX_PID_YAW_ANGLE_KD,
+    /* 高度控制追加在旧 26 项之后，旧姿态参数编号保持不变。 */
+    APEX_PID_VERTICAL_SPEED_KP,
+    APEX_PID_VERTICAL_SPEED_KI,
+    APEX_PID_VERTICAL_SPEED_KD,
+    /* 当前表示满杆油门上限，单位微秒，最低油门固定 1000。 */
+    APEX_PID_HOVER_PWM_US
 } ApexPidParameterId_t;
 
 typedef enum

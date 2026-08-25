@@ -13,7 +13,7 @@
 #include "battery.h"
 #include "blackbox.h"
 #include "control_link.h"
-#include "debug.h"
+#include "gps.h"
 #include "pid_table.h"
 #include "FreeRTOS.h"
 #include "main.h"
@@ -29,24 +29,13 @@
 #define RADIO_TX_GUARD_TIMEOUT_MS 4000U
 #define RADIO_NOTIFY_DIO1 0x00000001UL
 
-typedef struct
-{
-    float roll_deg;
-    float pitch_deg;
-    float yaw_deg;
-    uint16_t throttle_pwm_us;
-    bool imu_ready;
-    bool motor_ready;
-    bool armed;
-} RadioFlightState_t;
-
 static TaskHandle_t radio_task_handle;
 static RA01SC_Device_t radio_device;
 static RA01SC_Hardware_t radio_hardware;
 static RA01SC_Config_t radio_config;
 static uint8_t radio_tx_frame[APEX_PROTOCOL_MAX_FRAME_LENGTH];
 static uint8_t radio_rx_frame[APEX_PROTOCOL_MAX_FRAME_LENGTH];
-static RadioFlightState_t radio_flight_state;
+static RadioFlightStateSnapshot_t radio_flight_state;
 
 static int16_t Radio_ClampI16(int32_t value, int16_t minimum, int16_t maximum)
 {
@@ -77,20 +66,29 @@ static void Radio_ConfigureHardware(void)
     radio_hardware.rxen_pin = LORA_RXEN_Pin;
 }
 
-static void Radio_CopyFlightState(RadioFlightState_t *state)
+static void Radio_CopyFlightState(RadioFlightStateSnapshot_t *state)
 {
     taskENTER_CRITICAL();
     *state = radio_flight_state;
     taskEXIT_CRITICAL();
 }
 
-void Radio_PublishFlightState(float roll_deg, float pitch_deg, float yaw_deg, uint16_t throttle_pwm_us, bool imu_ready, bool motor_ready, bool armed)
+bool Radio_GetFlightStateSnapshot(RadioFlightStateSnapshot_t *state)
+{
+    if (state == NULL) return false;
+    Radio_CopyFlightState(state);
+    return true;
+}
+
+void Radio_PublishFlightState(float roll_deg, float pitch_deg, float yaw_deg, uint16_t throttle_pwm_us, int32_t altitude_cm, int16_t vertical_speed_cms, bool imu_ready, bool motor_ready, bool armed)
 {
     taskENTER_CRITICAL();
     radio_flight_state.roll_deg = roll_deg;
     radio_flight_state.pitch_deg = pitch_deg;
     radio_flight_state.yaw_deg = yaw_deg;
     radio_flight_state.throttle_pwm_us = throttle_pwm_us;
+    radio_flight_state.altitude_cm = altitude_cm;
+    radio_flight_state.vertical_speed_cms = vertical_speed_cms;
     radio_flight_state.imu_ready = imu_ready;
     radio_flight_state.motor_ready = motor_ready;
     radio_flight_state.armed = armed;
@@ -107,13 +105,10 @@ static RA01SC_Status_t Radio_Initialize(void)
     status = RA01SC_Init(&radio_device, &radio_hardware, &radio_config);
     if (status != RA01SC_STATUS_OK)
     {
-        Debug_Printf("[RADIO] init failed status=%u.\r\n", (unsigned int)status);
         return status;
     }
 
     status = RA01SC_StartReceive(&radio_device);
-    if (status == RA01SC_STATUS_OK) Debug_Printf("[RADIO] rx ready.\r\n");
-    else Debug_Printf("[RADIO] start rx failed status=%u.\r\n", (unsigned int)status);
     return status;
 }
 
@@ -121,22 +116,30 @@ static RA01SC_Status_t Radio_SendTelemetry(uint16_t sequence, uint8_t flight_mod
 {
     ApexTelemetry_t telemetry;
     ApexProtocolStatus_t protocol_status;
-    RadioFlightState_t flight_state;
+    RadioFlightStateSnapshot_t flight_state;
+    GPS_Data_t gps;
     uint8_t frame_length;
 
     Radio_CopyFlightState(&flight_state);
+    GPS_GetData(&gps);
     memset(&telemetry, 0, sizeof(telemetry));
     telemetry.sequence = sequence;
     telemetry.roll_cdeg = Radio_DegToCdeg(flight_state.roll_deg);
     telemetry.pitch_cdeg = Radio_DegToCdeg(flight_state.pitch_deg);
     telemetry.yaw_cdeg = Radio_DegToCdeg(flight_state.yaw_deg);
     telemetry.throttle_pwm_us = flight_state.throttle_pwm_us;
+    telemetry.altitude_cm = flight_state.altitude_cm;
+    telemetry.vertical_speed_cms = flight_state.vertical_speed_cms;
     telemetry.battery_mv = Battery_GetMillivolts();
     telemetry.flight_mode = flight_mode;
     if (flight_state.armed) telemetry.flags |= APEX_TELEMETRY_FLAG_ARMED;
     if (flight_state.imu_ready) telemetry.flags |= APEX_TELEMETRY_FLAG_IMU_READY;
     if (flight_state.motor_ready) telemetry.flags |= APEX_TELEMETRY_FLAG_MOTOR_READY;
     if (Blackbox_IsRecording()) telemetry.flags |= APEX_TELEMETRY_FLAG_BLACKBOX_RECORDING;
+    telemetry.satellites = gps.satellites;
+    telemetry.ground_speed_cms = (gps.ground_speed_cms > 65535U) ? 65535U : (uint16_t)gps.ground_speed_cms;
+    if (gps.fix_valid) telemetry.flags |= APEX_TELEMETRY_FLAG_GPS_FIX;
+    if (GPS_GetUtcTime(&telemetry.gps_utc_seconds)) telemetry.flags |= APEX_TELEMETRY_FLAG_GPS_TIME_VALID;
 
     protocol_status = ApexProtocol_EncodeTelemetry(&telemetry, radio_tx_frame, sizeof(radio_tx_frame), &frame_length);
     if (protocol_status != APEX_PROTOCOL_OK) return RA01SC_STATUS_INVALID_PARAM;
@@ -147,7 +150,7 @@ static RA01SC_Status_t Radio_SendPidResponse(const ApexPidCommand_t *command)
 {
     ApexPidResponse_t response;
     ApexProtocolStatus_t protocol_status;
-    RadioFlightState_t flight_state;
+    RadioFlightStateSnapshot_t flight_state;
     uint8_t frame_length;
 
     Radio_CopyFlightState(&flight_state);
@@ -184,17 +187,13 @@ static RA01SC_Status_t Radio_ProcessReceivedPacket(bool *tx_in_progress)
         if (protocol_status != APEX_PROTOCOL_OK)
         {
             ControlLink_RecordRejectedFrame();
-            Debug_Printf("[RADIO] pid cmd decode fail %u.\r\n", (unsigned int)protocol_status);
             return RA01SC_StartReceive(&radio_device);
         }
-        Debug_Printf("[RADIO] pid cmd op=%u id=%u seq=%u.\r\n", (unsigned int)pid_command.operation, (unsigned int)pid_command.parameter_id, (unsigned int)pid_command.sequence);
         radio_status = Radio_SendPidResponse(&pid_command);
         if (radio_status != RA01SC_STATUS_OK)
         {
-            Debug_Printf("[RADIO] pid rsp send fail %u.\r\n", (unsigned int)radio_status);
             return radio_status;
         }
-        Debug_Printf("[RADIO] pid rsp sent.\r\n");
         *tx_in_progress = true;
         return RA01SC_STATUS_OK;
     }
@@ -271,7 +270,6 @@ void Radio_Task(void *argument)
     bool was_transmitting;
 
     (void)argument;
-    Debug_Init();
     PidTable_Init();
     radio_task_handle = xTaskGetCurrentTaskHandle();
     memset(&radio_flight_state, 0, sizeof(radio_flight_state));
@@ -293,7 +291,6 @@ void Radio_Task(void *argument)
             current_tick = xTaskGetTickCount();
             if (tx_in_progress && ((current_tick - tx_start_tick) > pdMS_TO_TICKS(RADIO_TX_GUARD_TIMEOUT_MS)))
             {
-                Debug_Printf("[RADIO] tx timeout, reinit.\r\n");
                 break;
             }
 
@@ -307,7 +304,6 @@ void Radio_Task(void *argument)
                 status = Radio_ProcessDio1(&tx_in_progress);
                 if (status != RA01SC_STATUS_OK)
                 {
-                    Debug_Printf("[RADIO] irq failed status=%u, reinit.\r\n", (unsigned int)status);
                     break;
                 }
                 /* 刚启动遥测发送时记下时刻，超时未等到 TX_DONE 就复位模块。 */

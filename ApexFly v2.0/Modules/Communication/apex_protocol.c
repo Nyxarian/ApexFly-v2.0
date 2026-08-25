@@ -2,7 +2,7 @@
  * @file apex_protocol.c
  * @brief ApexFly 二进制通信协议编解码实现。
  *
- * 与遥控器 CoreFly F2 Remoto 使用同一套 0x06 帧格式。
+ * 与遥控器 CoreFly F2 Remoto 使用同一套 0x07 帧格式。
  * 改字节布局必须两端一起改，否则解不开。
  * 本文件只负责打包/拆包，不接触 SPI 和电机。
  */

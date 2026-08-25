@@ -5,10 +5,11 @@
  * 本模块使用 USART3（PC10 发送，PC11 接收，波特率 115200），与老工程一致。
  * USART2 留给 GPS，不要用来输出日志或波形。
  *
- * VOFA+ 使用方法：
- * - 查看文本日志：调用 Debug_Printf()，协议选择 FireWater
- * - 查看波形：调用 Debug_VofaJustFloat() 或 Debug_VofaImu6Axis()，协议选择 JustFloat
- * 同一时刻不要把文本日志和 JustFloat 二进制数据混在同一条串口数据流里。
+ * 当前 USART3 用于三类文本：
+ * - 姿态调试任务的 [ATT] 三角
+ * - GPS 时间和定位观察量
+ * - 黑匣子 dump / dumpall 的 CSV 和进度
+ * VOFA 波形接口保留为空操作，避免和 CSV 混流。看 GPS 时选 FireWater 文本即可。
  */
 
 #ifndef DEBUG_H
@@ -22,7 +23,7 @@ extern "C" {
 #endif
 
 /* Debug_Printf() 单次格式化缓冲区长度，超出部分会被截断。 */
-#define DEBUG_PRINTF_BUFFER_SIZE 256U
+#define DEBUG_PRINTF_BUFFER_SIZE 384U
 
 /* VOFA+ 单帧最多发送的浮点通道数量。 */
 #define DEBUG_VOFA_MAX_CHANNELS  12U
@@ -34,6 +35,15 @@ extern "C" {
  * 各个发送接口第一次使用时也会自动完成初始化。
  */
 void Debug_Init(void);
+
+/**
+ * @brief 仅供姿态调试任务输出机体系三角。
+ * @param roll_deg 横滚角，单位度。
+ * @param pitch_deg 俯仰角，单位度。
+ * @param yaw_deg 偏航角，单位度。
+ * @return 成功返回发送字符数，失败返回 -1。
+ */
+int Debug_PrintAttitudeAngles(float roll_deg, float pitch_deg, float yaw_deg);
 
 /**
  * @brief 通过 USART3 发送一段原始字节。

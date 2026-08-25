@@ -18,12 +18,37 @@ ApexFly v2.0/MDK-ARM/EventRecorderStub.scvd
 ApexFly v2.0/MDK-ARM/DebugConfig/
 ApexFly v2.0/MDK-ARM/RTE/
 ApexFly v2.0/MDK-ARM/.cmsis/
+ApexFly v2.0/MDK-ARM/build/
+ApexFly v2.0/MDK-ARM/listing/
+ApexFly v2.0/MDK-ARM/output/
+
+# 通用编译产物
+*.o
+*.d
+*.crf
+*.axf
+*.hex
+*.bin
+*.elf
+*.map
+*.lst
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
 
 # 黑匣子导出和临时截图（体积大，不是源码）
 BlackboxReader/exports/
 BlackboxReader/bin/
 BlackboxReader/_wave_*
-BlackboxDump/exports/
+BlackboxDump/
+bin/
+
+# 课程资料、本机临时目录
+尚硅谷无人机/
+.dsh-review-tmp/
 
 # 编辑器 / 系统
 .vs/
@@ -34,3 +59,6 @@ BlackboxDump/exports/
 Thumbs.db
 Desktop.ini
 .DS_Store
+*~
+*.swp
+*.swo
