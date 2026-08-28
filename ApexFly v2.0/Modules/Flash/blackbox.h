@@ -3,8 +3,9 @@
  * @brief 飞机端黑匣子：PID 双备份、解锁后场次日志、串口按场次导出 CSV。
  *
  * 只有本模块的任务碰 SPI3 / W25Q64。电机任务只 SubmitSample，电台任务只 RequestSave。
- * 不搬老 app_blackbox，不写水平零点，不实现六面校准。
+ * 不搬老 app_blackbox，不写水平零点。0x002000 给磁力计硬铁校准双备份，不再给六面校准。
  * 日志按 Session 切开，每场开头钉死旧 26 项姿态参数和新增高度参数。
+ * 样本里 target_vz_cms 现记磁航向（百分之一度），CSV 列名为 mag_hdg。
  * 样本仍用相对毫秒；解锁时刻的 UTC 写在高度参数记录里，上锁时刻的 UTC 写在场次尾。
  * 没收到合法 RMC 时这两处都写 0。导出时把 Unix 秒换成北京时间。
  * 日志区写满后从起点覆盖，写指针记在 0x003000；dump [N] 从当前写指针往回取最近 N 条，不是从 Flash 物理末尾取。
@@ -54,7 +55,7 @@ typedef struct
     int16_t altitude_cm;
     /* 卡尔曼垂直速度，单位厘米每秒。 */
     int16_t vz_cms;
-    /* 杆位和高度保持生成的目标垂速，单位厘米每秒。 */
+    /* 磁航向，单位百分之一度，0～35999。无效填 -1。字段沿用 target_vz_cms，记录布局不变。 */
     int16_t target_vz_cms;
     /* 垂速 PID 对悬停油门的修正，单位微秒。 */
     int16_t vz_correction_us;
@@ -95,6 +96,18 @@ bool Blackbox_IsDumping(void);
  * @return 已入队返回 true；未就绪或上一次还在写返回 false。
  */
 bool Blackbox_RequestSave(void);
+
+/**
+ * @brief 把当前磁力计硬铁偏移排队写入 0x002000 双备份。电台任务调用，本函数不擦 Flash。
+ * @return 已入队返回 true；未就绪、正在记日志或上一次还在写返回 false。
+ */
+bool Blackbox_RequestMagCalibrationSave(void);
+
+/**
+ * @brief 把上电读出的磁力计硬铁偏移再灌进 RAM。磁力计任务芯片就绪后调用。
+ * @return 有合法保存值并已应用返回 true。
+ */
+bool Blackbox_ApplySavedMagCalibration(void);
 
 /**
  * @brief 从双备份槽读出合法表并灌进 RAM PID。上锁时由电台任务调用。

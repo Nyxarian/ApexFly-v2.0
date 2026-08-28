@@ -14,15 +14,14 @@
  * 6. 100Hz：刷新失联 → 读快照 → 已解锁则把油门杆直通映射成基础油门，再进串级混控
  *
  * 油门映射：最低固定 1000us，最高由 PID 表 APEX_PID_HOVER_PWM_US 决定，默认 1500us。
- * 气压和高度估计只用于遥测显示，不再控制电机。
- * 本阶段不使用 roll/pitch/yaw 杆量。Kp 全 0 时倾斜不会纠偏，这是预期现象。
+ * 气压计任务已停用，I2C2 只给磁力计。高度遥测先填 0，altitude_est 源码保留。
+ * 解锁后黑匣子样本把磁航向写进 target_vz_cms；电台遥测另填 home_distance_m。
+ * 偏航杆中位锁磁航向，出死区切速率。横滚俯仰杆映射成目标角，满杆约 ±10°，再加 Trim。YAW ANGLE 为 0 时偏航外环不出力。
  */
 
 #include "motor_test.h"
 
-#include "altitude_est.h"
 #include "attitude_control.h"
-#include "baro.h"
 #include "battery.h"
 #include "blackbox.h"
 #include "cmsis_os.h"
@@ -31,12 +30,12 @@
 #include "imu_attitude.h"
 #include "imu_bias.h"
 #include "imu_level.h"
+#include "mag.h"
 #include "mixer.h"
 #include "motor.h"
 #include "mpu6050.h"
 #include "pid_table.h"
 #include "radio.h"
-#include <math.h>
 #include <string.h>
 
 #define ESC_ARM_WAIT_MS 3000U
@@ -47,8 +46,6 @@
 #define MOTOR_BATTERY_UPDATE_MS 1000U
 #define MOTOR_DT_MIN_S 0.005f
 #define MOTOR_DT_MAX_S 0.03f
-#define MOTOR_GROUND_RATE_LIMIT_DPS 3.0f
-#define MOTOR_GROUND_ACCEL_LIMIT_MPS2 0.5f
 #define MOTOR_ATTITUDE_ENABLE_PWM_US 1050U
 
 /**
@@ -88,6 +85,20 @@ static float MotorTest_Clampf(float value, float minimum, float maximum)
     if (value < minimum) return minimum;
     if (value > maximum) return maximum;
     return value;
+}
+
+static int16_t MotorTest_MagHeadingCdeg(bool *calibration_valid)
+{
+    MagSnapshot_t mag;
+    float heading_deg;
+
+    if (calibration_valid != NULL) *calibration_valid = false;
+    if (!Mag_GetSnapshot(&mag) || !mag.valid) return -1;
+    if (calibration_valid != NULL) *calibration_valid = mag.calibration_valid;
+    heading_deg = mag.calibration_valid ? mag.cal_heading_deg : mag.body_heading_deg;
+    if (heading_deg < 0.0f) heading_deg += 360.0f;
+    if (heading_deg >= 360.0f) heading_deg -= 360.0f;
+    return MotorTest_ToCenti(heading_deg);
 }
 
 /**
@@ -133,27 +144,27 @@ void MotorTest_Task(void *argument)
     uint32_t next_battery_tick;
     uint32_t imu_tick;
     float control_dt_s;
-    float accel_bias_sum;
-    uint16_t accel_bias_count;
     float roll_corr_us;
     float pitch_corr_us;
     float yaw_corr_us;
-    float baro_altitude_m;
-    float accel_up_mps2;
-    bool baro_fresh;
-    AltitudeEstimate_t alt_est;
-    BaroSnapshot_t baro_snap;
     int32_t altitude_cm;
     int16_t vz_cms;
+    int16_t mag_heading_cdeg;
+    bool mag_calibration_valid;
+    float roll_trim_deg;
+    float pitch_trim_deg;
 
     (void)argument;
     PidTable_Init();
     Battery_Init();
     memset(&body, 0, sizeof(body));
-    memset(&alt_est, 0, sizeof(alt_est));
     throttle_us = MOTOR_PWM_MIN_US;
     altitude_cm = 0;
     vz_cms = 0;
+    mag_heading_cdeg = -1;
+    mag_calibration_valid = false;
+    roll_trim_deg = 0.0f;
+    pitch_trim_deg = 0.0f;
 
     if (!Motor_Init())
     {
@@ -183,15 +194,12 @@ void MotorTest_Task(void *argument)
         IMU_Level_Start(&level_collector, IMU_LEVEL_SAMPLE_COUNT);
         IMU_Attitude_Init(&attitude);
         AttitudeControl_Reset();
-        AltitudeEst_Init(0.0f);
         bias_ready = false;
         level_ready = false;
         was_armed = false;
         last_imu_tick = 0U;
         next_battery_tick = osKernelGetTickCount();
         control_dt_s = IMU_DELTA_TIME_S;
-        accel_bias_sum = 0.0f;
-        accel_bias_count = 0U;
     
         for (;;)
         {
@@ -232,9 +240,6 @@ void MotorTest_Task(void *argument)
 
             if (!level_ready)
             {
-                /* 水平零点采样期间机体静止，顺便平均垂直线性加速度作为高度滤波初始 ba。 */
-                accel_bias_sum += IMU_Attitude_VerticalAccelUp(&attitude, &imu_data);
-                if (accel_bias_count < 0xFFFFU) accel_bias_count++;
                 if (!IMU_Level_Update(&level_collector, &body))
                 {
                     osDelay(IMU_SAMPLE_PERIOD_MS);
@@ -244,32 +249,14 @@ void MotorTest_Task(void *argument)
                 level_ready = true;
                 Motor_Disarm();
                 AttitudeControl_Reset();
-                AltitudeEst_Init((accel_bias_count > 0U) ? (accel_bias_sum / (float)accel_bias_count) : 0.0f);
                 continue;
             }
 
             IMU_Level_Apply(&level_collector.offset, &body);
 
-            /* 气压 8 Hz，加速度 100 Hz：每拍都预测，有新气压才更新。 */
-            baro_altitude_m = 0.0f;
-            baro_fresh = Baro_TakeNewAltitude(&baro_altitude_m);
-            accel_up_mps2 = IMU_Attitude_VerticalAccelUp(&attitude, &imu_data);
-            AltitudeEst_Update(accel_up_mps2, control_dt_s, baro_altitude_m, baro_fresh);
-            AltitudeEst_Get(&alt_est);
-            /* 卡尔曼还没跟上时，遥测先发气压相对高度，避免遥控一直 0.0m。 */
-            if (alt_est.healthy)
-            {
-                altitude_cm = MotorTest_ToI16(alt_est.z_m * 100.0f);
-                vz_cms = MotorTest_ToCenti(alt_est.vz_mps);
-            }
-            else
-            {
-                /* 卡尔曼不健康时，遥控仍显示原始气压高度，但垂速清零且高度环禁用。 */
-                if (baro_fresh) altitude_cm = MotorTest_ToI16(baro_altitude_m * 100.0f);
-                else if (Baro_GetSnapshot(&baro_snap)) altitude_cm = MotorTest_ToI16(baro_snap.altitude_m * 100.0f);
-                else altitude_cm = 0;
-                vz_cms = 0;
-            }
+            /* 气压计停用后高度和垂速遥测固定为 0，不读 I2C2。 */
+            altitude_cm = 0;
+            vz_cms = 0;
 
             if ((int32_t)(osKernelGetTickCount() - next_battery_tick) >= 0)
             {
@@ -279,7 +266,6 @@ void MotorTest_Task(void *argument)
             ControlLink_Update((uint32_t)osKernelGetTickCount());
             ControlLink_GetSnapshot(&link);
             armed = link.connected && link.command_valid && ((link.command.flags & APEX_CONTROL_FLAG_ARM_REQUESTED) != 0U);
-            Baro_SetGroundTrackingAllowed(!armed && (fabsf(body.roll_rate_dps) < MOTOR_GROUND_RATE_LIMIT_DPS) && (fabsf(body.pitch_rate_dps) < MOTOR_GROUND_RATE_LIMIT_DPS) && (fabsf(body.yaw_rate_dps) < MOTOR_GROUND_RATE_LIMIT_DPS) && (fabsf(accel_up_mps2 - alt_est.accel_bias_mps2) < MOTOR_GROUND_ACCEL_LIMIT_MPS2));
 
             if (!armed)
             {
@@ -295,6 +281,8 @@ void MotorTest_Task(void *argument)
                     Blackbox_NotifyArmed();
                 }
                 /* 油门杆直接映射成基础推力，不再经过垂速环。 */
+                mag_heading_cdeg = MotorTest_MagHeadingCdeg(&mag_calibration_valid);
+                PidTable_GetAttitudeTrimDeg(&roll_trim_deg, &pitch_trim_deg);
                 throttle_us = MotorTest_MapStickToThrottleUs(link.command.throttle);
                 /* 低油门先保持四路等值，避免地面姿态误差让单路电机提前抬升。 */
                 if (throttle_us <= MOTOR_ATTITUDE_ENABLE_PWM_US)
@@ -309,7 +297,7 @@ void MotorTest_Task(void *argument)
                     mixer_output.motor_4_us = throttle_us;
                     Motor_SetAllPulseUs(throttle_us);
                 }
-                else if (AttitudeControl_Update((float)throttle_us, &body, control_dt_s, &mixer_output))
+                else if (AttitudeControl_Update((float)throttle_us, &body, (mag_heading_cdeg < 0) ? 0.0f : ((float)mag_heading_cdeg / 100.0f), mag_calibration_valid && (mag_heading_cdeg >= 0), link.command.yaw, link.command.roll, link.command.pitch, roll_trim_deg, pitch_trim_deg, control_dt_s, &mixer_output))
                 {
                     MotorTest_ApplyMixer(&mixer_output);
                     AttitudeControl_GetLastCorrections(&roll_corr_us, &pitch_corr_us, &yaw_corr_us);
@@ -343,7 +331,7 @@ void MotorTest_Task(void *argument)
                 sample.motor_us[3] = mixer_output.motor_4_us;
                 sample.altitude_cm = altitude_cm;
                 sample.vz_cms = vz_cms;
-                sample.target_vz_cms = 0;
+                sample.target_vz_cms = mag_heading_cdeg;
                 sample.vz_correction_us = 0;
                 sample.hover_pwm_us = PidTable_GetMaxThrottleUs();
                 sample.altitude_state = 0U;

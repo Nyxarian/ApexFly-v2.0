@@ -6,7 +6,9 @@
  * 帧中多字节数据均为小端，不直接发送 C 结构体，避免对齐差异。
  * 本文件只做编解码，不读写 LoRa，也不写电机。
  * 飞机 v2 尚未接入的遥测字段填 0。
- * 六面校准操作码仍占 5/6/7，飞机回 INVALID_OPERATION，不再实现校准。
+ * home_distance_m 现复用为磁航向整度 0～359；无效填 0xFFFF。HOME_VALID 表示磁力计样本有效。
+ * 操作码 5/6/7 已废弃，飞机回 INVALID_OPERATION。
+ * 8/9/10 给磁力计硬铁校准：开始采集、结束并写入 0x002000、取消本次。
  */
 
 #ifndef APEX_PROTOCOL_H
@@ -44,6 +46,7 @@ extern "C" {
 /* 飞机返回给遥控器的状态标志。 */
 #define APEX_TELEMETRY_FLAG_ARMED 0x01U
 #define APEX_TELEMETRY_FLAG_GPS_FIX 0x02U
+/* 磁力计样本有效，home_distance_m 是 0～359 的磁航向整度。以后做 GPS 返航再另开字段。 */
 #define APEX_TELEMETRY_FLAG_HOME_VALID 0x04U
 #define APEX_TELEMETRY_FLAG_BLACKBOX_RECORDING 0x08U
 #define APEX_TELEMETRY_FLAG_IMU_READY 0x10U
@@ -53,6 +56,9 @@ extern "C" {
 
 /* 飞机端已从 GPS RMC 语句取得有效 UTC 日期时间，遥控器可据此显示北京时间。 */
 #define APEX_TELEMETRY_FLAG_GPS_TIME_VALID 0x40U
+
+/* 飞机正在采集磁力计硬铁校准样本。 */
+#define APEX_TELEMETRY_FLAG_MAG_CALIBRATING 0x80U
 
 typedef enum
 {
@@ -71,10 +77,16 @@ typedef enum
     APEX_PID_OPERATION_SAVE,
     APEX_PID_OPERATION_LOAD_SAVED,
     APEX_PID_OPERATION_LOAD_DEFAULTS,
-    /* 旧六面校准操作码，飞机不再实现，收到后回 INVALID_OPERATION。 */
-    APEX_PID_OPERATION_ACCEL_CAL_SAMPLE = 5,
-    APEX_PID_OPERATION_ACCEL_CAL_FINISH = 6,
-    APEX_PID_OPERATION_ACCEL_CAL_CANCEL = 7
+    /* 已废弃的操作码，飞机收到后回 INVALID_OPERATION，数值保留以免和遥控错位。 */
+    APEX_PID_OPERATION_RESERVED_5 = 5,
+    APEX_PID_OPERATION_RESERVED_6 = 6,
+    APEX_PID_OPERATION_RESERVED_7 = 7,
+    /* 磁力计硬铁校准：开始采集三轴极值。飞机必须锁定。 */
+    APEX_PID_OPERATION_MAG_CAL_START = 8,
+    /* 磁力计硬铁校准：结束采集、计算偏移，并写入 0x002000。 */
+    APEX_PID_OPERATION_MAG_CAL_STOP = 9,
+    /* 磁力计硬铁校准：取消本次采集，不更新偏移。 */
+    APEX_PID_OPERATION_MAG_CAL_CANCEL = 10
 } ApexPidOperation_t;
 
 typedef enum
@@ -161,6 +173,7 @@ typedef struct
     int16_t vertical_speed_cms;
     uint16_t ground_speed_cms;
     uint16_t battery_mv;
+    /* 磁航向整度，0～359。无效为 0xFFFF。字段名沿用 home_distance_m，包布局不变。 */
     uint16_t home_distance_m;
     int16_t rssi_dbm;
     int8_t snr_q4;

@@ -36,6 +36,8 @@
 #include "baro.h"
 #include "blackbox.h"
 #include "gps.h"
+#include "i2c2_lock.h"
+#include "mag.h"
 #include "radio.h"
 /* USER CODE END Includes */
 
@@ -124,6 +126,13 @@ const osThreadAttr_t gpsTask_attributes = {
   .priority = (osPriority_t) osPriorityBelowNormal,
   .stack_size = 512 * 4
 };
+/* Definitions for magTask */
+osThreadId_t magTaskHandle;
+const osThreadAttr_t magTask_attributes = {
+  .name = "magTask",
+  .priority = (osPriority_t) osPriorityBelowNormal,
+  .stack_size = 512 * 4
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -139,6 +148,7 @@ void StartRadioTask(void *argument);
 void StartBlackboxTask(void *argument);
 void StartBaroTask(void *argument);
 void StartGpsTask(void *argument);
+void StartMagTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -171,7 +181,7 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
+  I2C2_Lock_Init();
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -208,11 +218,14 @@ void MX_FREERTOS_Init(void) {
   /* creation of blackboxTask */
   blackboxTaskHandle = osThreadNew(StartBlackboxTask, NULL, &blackboxTask_attributes);
 
-  /* creation of baroTask */
-  baroTaskHandle = osThreadNew(StartBaroTask, NULL, &baroTask_attributes);
+  /* 气压计任务停用，I2C2 只给磁力计。源码保留，不创建线程。 */
+  baroTaskHandle = NULL;
 
   /* creation of gpsTask */
   gpsTaskHandle = osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
+
+  /* creation of magTask */
+  magTaskHandle = osThreadNew(StartMagTask, NULL, &magTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -344,12 +357,16 @@ void StartBlackboxTask(void *argument)
 }
 
 /**
-  * @brief  气压任务。独占 I2C2 上的 SPL06，采地面零点后发布离地高度。
+  * @brief  气压任务入口保留，当前不创建该线程，I2C2 只给磁力计。
   */
 void StartBaroTask(void *argument)
 {
   /* USER CODE BEGIN StartBaroTask */
-  Baro_Task(argument);
+  (void)argument;
+  for (;;)
+  {
+    osDelay(1000U);
+  }
   /* USER CODE END StartBaroTask */
 }
 
@@ -361,6 +378,16 @@ void StartGpsTask(void *argument)
   /* USER CODE BEGIN StartGpsTask */
   GPS_Task(argument);
   /* USER CODE END StartGpsTask */
+}
+
+/**
+  * @brief  磁力计任务。I2C2 读 GY-273，只发布磁场快照，不进姿态环。
+  */
+void StartMagTask(void *argument)
+{
+  /* USER CODE BEGIN StartMagTask */
+  Mag_Task(argument);
+  /* USER CODE END StartMagTask */
 }
 
 /* Private application code --------------------------------------------------*/

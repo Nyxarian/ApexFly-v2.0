@@ -336,7 +336,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32G474xx</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/Device/ST/STM32G4xx/Include;../Drivers/CMSIS/Include;..\Modules\De_Bug;..\Modules\IMU;..\Modules\Motor;..\Modules\LED;..\Modules\Control;..\Modules\Communication;..\Modules\Flash;..\Modules\Power;..\Modules\Baro;..\Modules\GPS</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/Device/ST/STM32G4xx/Include;../Drivers/CMSIS/Include;..\Modules\De_Bug;..\Modules\IMU;..\Modules\Motor;..\Modules\LED;..\Modules\Control;..\Modules\Communication;..\Modules\Flash;..\Modules\Power;..\Modules\Baro;..\Modules\GPS;..\Modules\Mag</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -959,6 +959,41 @@
               <FileName>altitude_est.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Modules\Baro\altitude_est.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Modules/Mag</GroupName>
+          <Files>
+            <File>
+              <FileName>i2c2_lock.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Modules\Mag\i2c2_lock.c</FilePath>
+            </File>
+            <File>
+              <FileName>i2c2_lock.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Modules\Mag\i2c2_lock.h</FilePath>
+            </File>
+            <File>
+              <FileName>hmc5883l.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Modules\Mag\hmc5883l.c</FilePath>
+            </File>
+            <File>
+              <FileName>hmc5883l.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Modules\Mag\hmc5883l.h</FilePath>
+            </File>
+            <File>
+              <FileName>mag.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Modules\Mag\mag.c</FilePath>
+            </File>
+            <File>
+              <FileName>mag.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Modules\Mag\mag.h</FilePath>
             </File>
           </Files>
         </Group>

@@ -46,8 +46,9 @@ BlackboxReader/_wave_*
 BlackboxDump/
 bin/
 
-# 课程资料、本机临时目录
+# 课程资料、厂商手册、本机临时目录
 尚硅谷无人机/
+技术文档/
 .dsh-review-tmp/
 
 # 编辑器 / 系统

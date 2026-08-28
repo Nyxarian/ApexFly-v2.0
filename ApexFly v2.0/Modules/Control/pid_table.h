@@ -5,7 +5,8 @@
  * 本模块把协议 ID 映射到 attitude_control 的串级参数，以及满杆油门上限。
  * GET 回整张表；SET 改一项后立刻写进正在跑的 PID 或油门映射。
  * SAVE / LOAD_SAVED 交给黑匣子任务写 W25Q64，电台任务不碰 SPI3。
- * 六面校准操作码协议里还在，这里一律回 INVALID_OPERATION，不再实现。
+ * 操作码 5/6/7 已废弃，飞机一律回 INVALID_OPERATION。
+ * MAG_CAL_START/STOP/CANCEL 转给磁力计任务；STOP 成功后再排队写 0x002000。
  *
  * APEX_PID_HOVER_PWM_US 现在表示满杆对应的最高油门，单位微秒，最低油门固定 1000。
  * 无线任务调用本模块，不写 TIM8。解锁中禁止改参。
@@ -53,6 +54,13 @@ bool PidTable_ImportSnapshot(const int32_t *values_q10000);
  * @return 满杆对应的 PWM 脉宽，单位微秒，范围 1200～2000。
  */
 uint16_t PidTable_GetMaxThrottleUs(void);
+
+/**
+ * @brief 读取横滚、俯仰 Trim，加在跟杆目标角上，单位度。
+ * @param roll_trim_deg 横滚 Trim，右倾为正。
+ * @param pitch_trim_deg 俯仰 Trim，抬头为正。
+ */
+void PidTable_GetAttitudeTrimDeg(float *roll_trim_deg, float *pitch_trim_deg);
 
 #ifdef __cplusplus
 }

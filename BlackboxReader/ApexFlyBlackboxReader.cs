@@ -370,7 +370,7 @@ namespace ApexFlyBlackboxReader
             else
             {
                 allDataWriter = new StreamWriter(Path.Combine(currentExportDirectory, "blackbox_data.csv"), false, utf8, 65536);
-                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,vz_sp_cms,vz_corr_us,hover_us,alt_state,armed,conn");
+                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,hover_us,alt_state,armed,conn");
             }
             captureActive = true;
             dumpStarted = false;
@@ -712,7 +712,7 @@ namespace ApexFlyBlackboxReader
             string stem = Path.Combine(currentExportDirectory, "session_" + session.SessionId.ToString("000", CultureInfo.InvariantCulture));
             StreamWriter csv = new StreamWriter(stem + ".csv", false, utf8, 32768);
             csv.WriteLine("# session=" + session.SessionId.ToString(CultureInfo.InvariantCulture) + " t0_utc=" + session.T0Utc);
-            csv.WriteLine("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,vz_sp_cms,vz_corr_us,hover_us,alt_state,armed,conn");
+            csv.WriteLine("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,hover_us,alt_state,armed,conn");
             sessionCsvWriters[session.SessionId] = csv;
             StreamWriter vofa = new StreamWriter(stem + ".vofa.csv", false, utf8, 32768);
             sessionVofaWriters[session.SessionId] = vofa;
@@ -1022,7 +1022,7 @@ namespace ApexFlyBlackboxReader
             else
             {
                 allDataWriter = new StreamWriter(Path.Combine(currentExportDirectory, "blackbox_data.csv"), false, utf8, 65536);
-                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,vz_sp_cms,vz_corr_us,hover_us,alt_state,armed,conn");
+                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,hover_us,alt_state,armed,conn");
             }
             captureActive = true;
             dumpStarted = true;

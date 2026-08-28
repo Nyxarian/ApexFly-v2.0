@@ -6,6 +6,7 @@
 #include "spl06.h"
 
 #include "cmsis_os.h"
+#include "i2c2_lock.h"
 #include <math.h>
 #include <stddef.h>
 #include <string.h>
@@ -36,12 +37,22 @@
 
 static bool SPL06_ReadRegisters(SPL06_Device_t *device, uint8_t register_address, uint8_t *data, uint16_t length)
 {
-    return HAL_I2C_Mem_Read(device->i2c, device->address, register_address, I2C_MEMADD_SIZE_8BIT, data, length, 100U) == HAL_OK;
+    bool ok;
+
+    if (!I2C2_Lock(100U)) return false;
+    ok = (HAL_I2C_Mem_Read(device->i2c, device->address, register_address, I2C_MEMADD_SIZE_8BIT, data, length, 100U) == HAL_OK);
+    I2C2_Unlock();
+    return ok;
 }
 
 static bool SPL06_WriteRegister(SPL06_Device_t *device, uint8_t register_address, uint8_t value)
 {
-    return HAL_I2C_Mem_Write(device->i2c, device->address, register_address, I2C_MEMADD_SIZE_8BIT, &value, 1U, 100U) == HAL_OK;
+    bool ok;
+
+    if (!I2C2_Lock(100U)) return false;
+    ok = (HAL_I2C_Mem_Write(device->i2c, device->address, register_address, I2C_MEMADD_SIZE_8BIT, &value, 1U, 100U) == HAL_OK);
+    I2C2_Unlock();
+    return ok;
 }
 
 static int32_t SPL06_SignExtend(uint32_t value, uint8_t bits)
@@ -93,7 +104,13 @@ bool SPL06_InitAt(SPL06_Device_t *device, I2C_HandleTypeDef *i2c, uint8_t addres
     device->pressure_scale = SPL06_SCALE_OSR_32;
     device->temperature_scale = SPL06_SCALE_OSR_8;
 
-    if (HAL_I2C_IsDeviceReady(device->i2c, device->address, 3U, 100U) != HAL_OK) return false;
+    if (!I2C2_Lock(100U)) return false;
+    if (HAL_I2C_IsDeviceReady(device->i2c, device->address, 3U, 100U) != HAL_OK)
+    {
+        I2C2_Unlock();
+        return false;
+    }
+    I2C2_Unlock();
     if (!SPL06_WriteRegister(device, SPL06_REG_RESET, SPL06_RESET_COMMAND)) return false;
     osDelay(50U);
 

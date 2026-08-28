@@ -1,9 +1,8 @@
 /**
  * @file attitude_debug.c
- * @brief 姿态角和 GPS 观察串口任务实现。
+ * @brief 观察串口任务实现。当前只打印磁力计，方便接线判型和原始值检查。
  *
- * 每 100 ms 输出一次机体系 Roll、Pitch、Yaw，以及 GPS 时间和定位观察量。
- * 姿态来源是 Radio 模块保存的最新飞控快照，避免多个任务同时读取 MPU6050。
+ * 姿态和 GPS 文本先注释，测完磁力计后再打开。
  * 黑匣子正在 dump 时暂停打印，避免文本插进 CSV。
  */
 
@@ -12,12 +11,16 @@
 #include "blackbox.h"
 #include "cmsis_os.h"
 #include "debug.h"
+#include "mag.h"
+#if 0
 #include "gps.h"
 #include "radio.h"
+#endif
 #include <stdint.h>
 
 #define ATTITUDE_DEBUG_PERIOD_MS 100U
 
+#if 0
 static void AttitudeDebug_SplitSigned(int32_t value, uint32_t scale, const char **sign, uint32_t *whole, uint32_t *fraction)
 {
     uint32_t magnitude;
@@ -35,9 +38,11 @@ static void AttitudeDebug_SplitSigned(int32_t value, uint32_t scale, const char 
     *whole = magnitude / scale;
     *fraction = magnitude % scale;
 }
+#endif
 
 void AttitudeDebug_Task(void *argument)
 {
+#if 0
     RadioFlightStateSnapshot_t state;
     GPS_Data_t gps;
     uint32_t utc_unix_seconds;
@@ -59,12 +64,16 @@ void AttitudeDebug_Task(void *argument)
     uint32_t latitude_fraction;
     uint32_t longitude_whole;
     uint32_t longitude_fraction;
+#endif
+    MagSnapshot_t mag;
+    const char *chip_name;
 
     (void)argument;
     for (;;)
     {
         if (!Blackbox_IsDumping())
         {
+#if 0
             if (Radio_GetFlightStateSnapshot(&state))
             {
                 (void)Debug_PrintAttitudeAngles(state.roll_deg, state.pitch_deg, state.yaw_deg);
@@ -85,6 +94,14 @@ void AttitudeDebug_Task(void *argument)
             {
                 Debug_Printf("[GPS_TIME] time_valid=0 utc=NA bjt=NA unix=0.\r\n");
             }
+#endif
+            chip_name = "NONE";
+            (void)Mag_GetSnapshot(&mag);
+            if (mag.chip == MAG_CHIP_HMC5883L) chip_name = "HMC5883L";
+            else if (mag.chip == MAG_CHIP_QMC5883L) chip_name = "QMC5883L";
+            else if (mag.chip == MAG_CHIP_QMC5883P) chip_name = "QMC5883P";
+            else if (mag.chip == MAG_CHIP_QMC6308) chip_name = "QMC6308";
+            Debug_Printf("[MAG] valid=%u chip=%s raw=%d,%d,%d body=%.3f,%.3f,%.3f mag=%.3f hdg=%.1f bhdg=%.1f cal=%u,%.3f,%.3f,%.3f calmag=%.3f calhdg=%.1f ok=%lu ovf=%lu err=%lu fail=%u found=%u.\r\n", mag.valid ? 1U : 0U, chip_name, (int)mag.raw_x, (int)mag.raw_y, (int)mag.raw_z, (double)mag.mx_gauss, (double)mag.my_gauss, (double)mag.mz_gauss, (double)mag.body_magnitude_gauss, (double)mag.raw_heading_deg, (double)mag.body_heading_deg, mag.calibration_valid ? 1U : 0U, (double)mag.cal_mx_gauss, (double)mag.cal_my_gauss, (double)mag.cal_mz_gauss, (double)mag.cal_magnitude_gauss, (double)mag.cal_heading_deg, (unsigned long)mag.sample_count, (unsigned long)mag.overflow_count, (unsigned long)mag.error_count, mag.probe.fail_code, mag.probe.found_count);
         }
         osDelay(ATTITUDE_DEBUG_PERIOD_MS);
     }

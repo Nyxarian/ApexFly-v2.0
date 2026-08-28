@@ -11,7 +11,9 @@
  * 遥控在线调参走 PidTable，经 AttitudeControl_ApplyParams() 写进三轴串级。
  *
  * 每轴都走完整串级：外环角度 -> 目标角速度 -> 内环 -> 混控微秒。
- * 当前目标角为 0，偏航外环也会算；默认表里 6 组 Kp 先全部为 0，限幅为 200。
+ * 横滚俯仰外环吃机体系姿态角，目标角由遥控杆映射，满杆约 ±10°，再加 Trim。
+ * 偏航外环吃磁航向相对松杆目标的最短角误差。
+ * 偏航杆出死区时外环让路，内环直接跟杆角速度。默认表里 6 组 Kp 先全部为 0，限幅为 200。
  *
  * 送进混控的符号必须与实机测试一致，不要改 mixer.c 里的加减号：
  * roll_correction_us  = -Kp * roll_deg
@@ -21,6 +23,7 @@
  * 横滚：外环、内环输出直接进混控。
  * 俯仰：外环、内环输出都再取一次反，才能变成实机需要的正号。
  * 偏航：与横滚相同，内环输出直接进混控；若实机拧航向反了，再只改这里的符号。
+ * 偏航外环测量是最短角误差，目标仍为 0，不要把 0～359 的航向直接送进 PID。
  */
 
 #ifndef ATTITUDE_CONTROL_H
@@ -29,6 +32,7 @@
 #include "imu_attitude.h"
 #include "mixer.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -99,14 +103,21 @@ void AttitudeControl_ApplyParams(const AttitudePidParams_t *params);
 void AttitudeControl_Reset(void);
 
 /**
- * @brief 用当前机体系姿态和角速度更新一拍串级自稳，并计算四路电机脉宽。
+ * @brief 用当前机体系姿态、磁航向和角速度更新一拍串级自稳，并计算四路电机脉宽。
  * @param throttle_us 基础油门，单位微秒。
  * @param body 已经映射到机体系的姿态角和角速度。
+ * @param mag_heading_deg 磁航向，单位度，0～360。仅在 mag_heading_valid 时使用。
+ * @param mag_heading_valid 磁力计有效且已完成硬铁校准。
+ * @param yaw_stick 遥控偏航杆，-1000～1000，中位附近视为保持航向。
+ * @param roll_stick 遥控横滚杆，-1000～1000，左负右正，满杆对应约 ±10°。
+ * @param pitch_stick 遥控俯仰杆，-1000～1000，前负后正，满杆对应约 ±10°。
+ * @param roll_trim_deg 横滚 Trim，加在目标角上，单位度。
+ * @param pitch_trim_deg 俯仰 Trim，加在目标角上，单位度。
  * @param dt_s 与上一拍间隔，单位秒，100Hz 时应接近 0.01。
  * @param output 混控输出的四路脉宽。
  * @return 混控计算成功返回 true。
  */
-bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, float dt_s, MixerOutput_t *output);
+bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, float mag_heading_deg, bool mag_heading_valid, int16_t yaw_stick, int16_t roll_stick, int16_t pitch_stick, float roll_trim_deg, float pitch_trim_deg, float dt_s, MixerOutput_t *output);
 
 /**
  * @brief 最近一次 Update 送进混控的三轴修正，单位微秒。给黑匣子记一拍用。

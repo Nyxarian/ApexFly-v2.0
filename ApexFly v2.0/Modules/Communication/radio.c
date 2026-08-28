@@ -14,6 +14,7 @@
 #include "blackbox.h"
 #include "control_link.h"
 #include "gps.h"
+#include "mag.h"
 #include "pid_table.h"
 #include "FreeRTOS.h"
 #include "main.h"
@@ -117,8 +118,11 @@ static RA01SC_Status_t Radio_SendTelemetry(uint16_t sequence, uint8_t flight_mod
     ApexTelemetry_t telemetry;
     ApexProtocolStatus_t protocol_status;
     RadioFlightStateSnapshot_t flight_state;
+    MagCalibrationStatus_t mag_cal;
+    MagSnapshot_t mag;
     GPS_Data_t gps;
     uint8_t frame_length;
+    float heading_deg;
 
     Radio_CopyFlightState(&flight_state);
     GPS_GetData(&gps);
@@ -140,6 +144,22 @@ static RA01SC_Status_t Radio_SendTelemetry(uint16_t sequence, uint8_t flight_mod
     telemetry.ground_speed_cms = (gps.ground_speed_cms > 65535U) ? 65535U : (uint16_t)gps.ground_speed_cms;
     if (gps.fix_valid) telemetry.flags |= APEX_TELEMETRY_FLAG_GPS_FIX;
     if (GPS_GetUtcTime(&telemetry.gps_utc_seconds)) telemetry.flags |= APEX_TELEMETRY_FLAG_GPS_TIME_VALID;
+    Mag_CalibrationGetStatus(&mag_cal);
+    if (mag_cal.active) telemetry.flags |= APEX_TELEMETRY_FLAG_MAG_CALIBRATING;
+    /* 遥控主页复用返航点槽显示磁航向。有校准用 calhdg，否则用 bhdg。 */
+    if (Mag_GetSnapshot(&mag) && mag.valid)
+    {
+        heading_deg = mag.calibration_valid ? mag.cal_heading_deg : mag.body_heading_deg;
+        if (heading_deg < 0.0f) heading_deg += 360.0f;
+        if (heading_deg >= 360.0f) heading_deg -= 360.0f;
+        telemetry.home_distance_m = (uint16_t)(heading_deg + 0.5f);
+        if (telemetry.home_distance_m >= 360U) telemetry.home_distance_m = 0U;
+        telemetry.flags |= APEX_TELEMETRY_FLAG_HOME_VALID;
+    }
+    else
+    {
+        telemetry.home_distance_m = 0xFFFFU;
+    }
 
     protocol_status = ApexProtocol_EncodeTelemetry(&telemetry, radio_tx_frame, sizeof(radio_tx_frame), &frame_length);
     if (protocol_status != APEX_PROTOCOL_OK) return RA01SC_STATUS_INVALID_PARAM;

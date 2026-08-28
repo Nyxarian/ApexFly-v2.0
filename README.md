@@ -9,7 +9,7 @@ STM32G474 四轴飞机端固件，以及配套的 PC 黑匣子读取器。
 ```text
 ApexFly v2.0/          飞机端 Keil + CubeMX 工程
   Core/                CubeMX 生成：时钟、GPIO、UART、I2C、SPI、TIM、ADC
-  Modules/             业务代码（IMU、电机、PID、电台、黑匣子、气压、GPS）
+  Modules/             业务代码（IMU、电机、PID、电台、黑匣子、气压、GPS、磁力计）
   Drivers/             STM32G4 HAL / CMSIS
   Middlewares/         FreeRTOS
 BlackboxReader/        Windows 黑匣子读取工具（C#）
@@ -19,7 +19,15 @@ BlackboxReader/        Windows 黑匣子读取工具（C#）
 
 ## 当前状态
 
-姿态环已经能飞。油门是直通映射，没有垂速环。GPS 只用来打时间和观察定位，不参与控制。黑匣子日志写满后从头覆盖。
+姿态环已经能飞。油门是直通映射，没有垂速环，也没有 XY 定点。GPS 只用来打时间和观察定位，不参与控制。黑匣子日志写满后从头覆盖。
+
+四根杆已经进飞控：
+
+- 油门：直通 PWM，满杆上限是 `APEX_PID_HOVER_PWM_US`
+- 横滚 / 俯仰：杆量映射成外环目标角，满杆约 ±10°，再加上 Trim；回中回平
+- 偏航：杆出死区跟角速度，回中锁当时的磁航向。外环测量是校准后的 `calhdg`，不是 IMU 积分偏航
+
+气压计任务已停，I2C2 只给磁力计。高度遥测先填 0。磁力计硬铁校准写在 W25Q64 `0x002000`。遥测里原来的返航距离字段现在发磁航向 0～359°；黑匣子 `target_vz_cms` 同样记磁航向。
 
 实际上电会跑这些任务：
 
@@ -28,10 +36,11 @@ BlackboxReader/        Windows 黑匣子读取工具（C#）
 | `ledTask` | PF9 蓝 / PF10 红心跳 |
 | `imuTestTask` | 空转，避免和电机任务抢 I2C1 |
 | `radioTask` | RA-01SC 收控制、回遥测和 PID 表 |
-| `blackboxTask` | W25Q64 存 PID、记场次、串口 dump |
-| `baroTask` | SPL06 离地高度（显示用，不改油门） |
+| `blackboxTask` | W25Q64 存 PID、磁力计校准、记场次、串口 dump |
+| `baroTask` | 已停用，任务空转 |
 | `gpsTask` | USART2 ATGM336H，解析 GGA/RMC |
-| `attitudeDebugTask` | USART3 打 `[ATT]` / `[GPS]` / `[GPS_TIME]` |
+| `magTask` | I2C2 读 GY-273，硬铁校准后给偏航外环 |
+| `attitudeDebugTask` | USART3 打 `[ATT]` / `[GPS]` / `[GPS_TIME]` / `[MAG]` |
 | `motorTestTask` | IMU 解算 + 姿态 PID + 混控 + 直通油门 |
 
 ## 硬件
@@ -42,7 +51,8 @@ BlackboxReader/        Windows 黑匣子读取工具（C#）
 |---|---|
 | 调试串口 | USART3，PC10/PC11，115200。USART2 是 GPS |
 | MPU6050 | I2C1，地址 0x68，±8g，±2000 dps |
-| SPL06-001 | I2C2，地址 0x76 |
+| SPL06-001 | I2C2，地址 0x76（可拔掉，总线留给磁力计） |
+| GY-273 磁力计 | I2C2，HMC5883L=0x1E 或 QMC5883L=0x0D；只接 VCC/GND/SCL/SDA，DRDY 不接 |
 | GPS ATGM336H | USART2，PA2/PA3，9600，DMA RX |
 | 电调 PWM | TIM8 CH1–CH4 = PC6–PC9，50 Hz，1000–2000 µs |
 | LoRa RA-01SC | SPI1：NSS=PA4，SCK=PA5，MISO=PA6，MOSI=PA7；DIO1=PB2；NRST=PE7 |
@@ -102,6 +112,14 @@ GPS 合法 RMC 后，遥测带 UTC Unix 秒和 `APEX_TELEMETRY_FLAG_GPS_TIME_VAL
 5. 调试口永远是 USART3；USART2 是 GPS。
 6. 协议版本 **0x07**，飞机和遥控器必须同步。
 7. 任何电机 / PID 测试先拆桨，没说装桨就不要上桨。
+8. 磁力计机体系映射当前是 MAG4：`mx = -chip x`，`my = chip y`，`mz = chip z`。航向不要再额外加 90°。
+9. 没有光流 / 测距之前不要做 XY 定点。
+
+## 已知限制
+
+- 松杆只会把横滚俯仰拉回水平，不会停在地面某一点。
+- 偏航外环默认 Kp 为 0；空中若仍有净偏航力矩，先加 YAW RATE，不要先把 YAW ANGLE 拉大。
+- 倾角大约超过 25° 时偏航外环会冻，目前没有倾角补偿。
 
 ## 编译
 
@@ -128,3 +146,5 @@ BlackboxReader/compile.bat
 7. `Modules/GPS/gps.c`
 8. `Modules/Communication/apex_protocol.h`
 9. `BlackboxReader/README.md`
+10. `Modules/Mag/mag.c`
+11. `Modules/Control/attitude_control.c`

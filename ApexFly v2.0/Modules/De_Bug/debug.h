@@ -5,11 +5,11 @@
  * 本模块使用 USART3（PC10 发送，PC11 接收，波特率 115200），与老工程一致。
  * USART2 留给 GPS，不要用来输出日志或波形。
  *
- * 当前 USART3 用于三类文本：
- * - 姿态调试任务的 [ATT] 三角
- * - GPS 时间和定位观察量
+ * 当前 USART3 用于两类文本：
+ * - 磁力计 [MAG] 原始值和粗航向
  * - 黑匣子 dump / dumpall 的 CSV 和进度
- * VOFA 波形接口保留为空操作，避免和 CSV 混流。看 GPS 时选 FireWater 文本即可。
+ * [ATT] / [GPS] / [GPS_TIME] 先关掉，测完磁力计再打开。
+ * VOFA 波形接口保留为空操作，避免和 CSV 混流。
  */
 
 #ifndef DEBUG_H

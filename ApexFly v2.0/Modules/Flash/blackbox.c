@@ -5,7 +5,7 @@
  * 分区：
  * 0x000000 参数槽 A，4KB
  * 0x001000 参数槽 B，4KB
- * 0x002000 保留（老六面校准，不读不写）
+ * 0x002000 磁力计硬铁校准，扇区内 A/B 各 64 字节
  * 0x003000 日志写指针索引，4KB
  * 0x004000 日志起点
  * 最后 4KB 自检扇区，不拿来记飞
@@ -23,6 +23,7 @@
 #include "debug.h"
 #include "gps.h"
 #include "main.h"
+#include "mag.h"
 #include "pid_table.h"
 #include "spi.h"
 #include "usart.h"
@@ -36,6 +37,12 @@
 
 #define BLACKBOX_PARAMETER_SECTOR_A 0x000000UL
 #define BLACKBOX_PARAMETER_SECTOR_B 0x001000UL
+#define BLACKBOX_MAG_CAL_SECTOR 0x002000UL
+#define BLACKBOX_MAG_CAL_SLOT_A_OFFSET 0U
+#define BLACKBOX_MAG_CAL_SLOT_B_OFFSET 64U
+#define BLACKBOX_MAG_CAL_RECORD_SIZE 64U
+#define BLACKBOX_MAG_CAL_MAGIC 0x4D414734UL /* "MAG4"，朝北/朝西实测后改为 -X 前、Y 右，与 MAG3 不兼容。 */
+#define BLACKBOX_MAG_CAL_SCHEMA 3U
 #define BLACKBOX_LOG_INDEX_ADDRESS 0x003000UL
 #define BLACKBOX_LOG_START_ADDRESS 0x004000UL
 #define BLACKBOX_TEST_SECTOR_ADDRESS (W25Q64_TOTAL_SIZE_BYTES - W25Q64_SECTOR_SIZE_BYTES)
@@ -145,6 +152,7 @@ typedef struct
     /* 保持 19 列 schema 2 的 armed/connected 字节位置；更早 17 列布局由导出器单独兼容。 */
     uint8_t armed;
     uint8_t connected;
+    /* 磁航向，单位百分之一度。无效 -1。沿用旧目标垂速槽，64 字节布局不变。 */
     int16_t target_vz_cms;
     int16_t vz_correction_us;
     uint16_t hover_pwm_us;
@@ -186,11 +194,39 @@ typedef struct
     int32_t values_q10000[APEX_PID_PARAMETER_COUNT];
 } BlackboxParameterCandidate_t;
 
+#pragma pack(push, 1)
+typedef struct
+{
+    uint32_t magic;
+    uint16_t schema;
+    uint16_t reserved0;
+    uint32_t generation;
+    int32_t offset_mx_q10000;
+    int32_t offset_my_q10000;
+    int32_t offset_mz_q10000;
+    int32_t span_mx_q10000;
+    int32_t span_my_q10000;
+    int32_t span_mz_q10000;
+    uint32_t sample_count;
+    uint8_t reserved1[20];
+    uint16_t crc16;
+    uint16_t reserved2;
+} BlackboxMagCalRecord_t;
+#pragma pack(pop)
+
+typedef struct
+{
+    bool valid;
+    uint32_t generation;
+    MagCalibrationStatus_t status;
+} BlackboxMagCalCandidate_t;
+
 typedef enum
 {
     BLACKBOX_JOB_NONE = 0,
     BLACKBOX_JOB_SAMPLE,
     BLACKBOX_JOB_SAVE,
+    BLACKBOX_JOB_SAVE_MAG_CAL,
     BLACKBOX_JOB_ARM,
     BLACKBOX_JOB_DISARM
 } BlackboxJobType_t;
@@ -208,7 +244,11 @@ static uint8_t blackbox_queue_buffer[BLACKBOX_SAMPLE_QUEUE_LENGTH * sizeof(Black
 static volatile bool blackbox_ready;
 static volatile bool blackbox_recording;
 static volatile bool blackbox_save_pending;
+static volatile bool blackbox_mag_cal_save_pending;
 static volatile bool blackbox_has_saved;
+static bool blackbox_has_saved_mag_cal;
+static uint32_t blackbox_mag_cal_generation;
+static MagCalibrationStatus_t blackbox_saved_mag_cal;
 static volatile uint32_t blackbox_dropped_samples;
 static uint32_t blackbox_log_write_address;
 static uint32_t blackbox_parameter_generation;
@@ -230,6 +270,7 @@ typedef char BlackboxSampleMustBe64[(sizeof(BlackboxSampleRecord_t) == BLACKBOX_
 typedef char BlackboxSessionEndMustBe64[(sizeof(BlackboxSessionEndRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxFlashRecordMustBe64[(sizeof(BlackboxFlashRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxLogIndexMustFit[(sizeof(BlackboxLogIndexRecord_t) <= BLACKBOX_LOG_INDEX_RECORD_SIZE) ? 1 : -1];
+typedef char BlackboxMagCalMustBe64[(sizeof(BlackboxMagCalRecord_t) == BLACKBOX_MAG_CAL_RECORD_SIZE) ? 1 : -1];
 
 static volatile bool blackbox_abort_dump;
 static bool blackbox_dumping;
@@ -368,6 +409,128 @@ static bool Blackbox_ReadSlot(uint32_t address, BlackboxParameterCandidate_t *ca
     else return false;
 
     candidate->valid = true;
+    return true;
+}
+
+static int32_t Blackbox_FloatToQ10000(float value)
+{
+    if (value >= 0.0f) return (int32_t)(value * (float)APEX_PID_VALUE_SCALE + 0.5f);
+    return (int32_t)(value * (float)APEX_PID_VALUE_SCALE - 0.5f);
+}
+
+static float Blackbox_Q10000ToFloat(int32_t value_q10000)
+{
+    return (float)value_q10000 / (float)APEX_PID_VALUE_SCALE;
+}
+
+static bool Blackbox_WriteMagCalSlot(uint32_t offset, uint32_t generation, const MagCalibrationStatus_t *status)
+{
+    BlackboxMagCalRecord_t record;
+
+    memset(&record, 0, sizeof(record));
+    record.magic = BLACKBOX_MAG_CAL_MAGIC;
+    record.schema = BLACKBOX_MAG_CAL_SCHEMA;
+    record.generation = generation;
+    record.offset_mx_q10000 = Blackbox_FloatToQ10000(status->offset_mx_gauss);
+    record.offset_my_q10000 = Blackbox_FloatToQ10000(status->offset_my_gauss);
+    record.offset_mz_q10000 = Blackbox_FloatToQ10000(status->offset_mz_gauss);
+    record.span_mx_q10000 = Blackbox_FloatToQ10000(status->span_mx_gauss);
+    record.span_my_q10000 = Blackbox_FloatToQ10000(status->span_my_gauss);
+    record.span_mz_q10000 = Blackbox_FloatToQ10000(status->span_mz_gauss);
+    record.sample_count = status->sample_count;
+    record.crc16 = ApexProtocol_Crc16((const uint8_t *)&record, (uint16_t)(sizeof(record) - 4U));
+    return W25Q64_Write(&blackbox_flash, BLACKBOX_MAG_CAL_SECTOR + offset, (const uint8_t *)&record, sizeof(record)) == W25Q64_STATUS_OK;
+}
+
+static bool Blackbox_ReadMagCalSlot(uint32_t offset, BlackboxMagCalCandidate_t *candidate)
+{
+    BlackboxMagCalRecord_t record;
+    uint16_t crc;
+
+    memset(candidate, 0, sizeof(*candidate));
+    if (W25Q64_Read(&blackbox_flash, BLACKBOX_MAG_CAL_SECTOR + offset, (uint8_t *)&record, sizeof(record)) != W25Q64_STATUS_OK) return false;
+    if ((record.magic != BLACKBOX_MAG_CAL_MAGIC) || (record.schema != BLACKBOX_MAG_CAL_SCHEMA)) return false;
+    crc = ApexProtocol_Crc16((const uint8_t *)&record, (uint16_t)(sizeof(record) - 4U));
+    if (crc != record.crc16) return false;
+    candidate->generation = record.generation;
+    candidate->status.valid = true;
+    candidate->status.quality_ok = true;
+    candidate->status.sample_count = record.sample_count;
+    candidate->status.offset_mx_gauss = Blackbox_Q10000ToFloat(record.offset_mx_q10000);
+    candidate->status.offset_my_gauss = Blackbox_Q10000ToFloat(record.offset_my_q10000);
+    candidate->status.offset_mz_gauss = Blackbox_Q10000ToFloat(record.offset_mz_q10000);
+    candidate->status.span_mx_gauss = Blackbox_Q10000ToFloat(record.span_mx_q10000);
+    candidate->status.span_my_gauss = Blackbox_Q10000ToFloat(record.span_my_q10000);
+    candidate->status.span_mz_gauss = Blackbox_Q10000ToFloat(record.span_mz_q10000);
+    candidate->valid = true;
+    return true;
+}
+
+static bool Blackbox_ApplyBestMagCalSlot(void)
+{
+    BlackboxMagCalCandidate_t slot_a;
+    BlackboxMagCalCandidate_t slot_b;
+    const BlackboxMagCalCandidate_t *best = NULL;
+
+    (void)Blackbox_ReadMagCalSlot(BLACKBOX_MAG_CAL_SLOT_A_OFFSET, &slot_a);
+    (void)Blackbox_ReadMagCalSlot(BLACKBOX_MAG_CAL_SLOT_B_OFFSET, &slot_b);
+    if (slot_a.valid && slot_b.valid) best = (slot_a.generation >= slot_b.generation) ? &slot_a : &slot_b;
+    else if (slot_a.valid) best = &slot_a;
+    else if (slot_b.valid) best = &slot_b;
+    if (best == NULL) return false;
+    blackbox_saved_mag_cal = best->status;
+    blackbox_mag_cal_generation = best->generation;
+    blackbox_has_saved_mag_cal = true;
+    (void)Mag_CalibrationApplySaved(&best->status);
+    return true;
+}
+
+static bool Blackbox_SaveMagCalibration(const MagCalibrationStatus_t *status)
+{
+    uint32_t generation;
+    bool ok;
+
+    if ((status == NULL) || !status->valid) return false;
+    generation = blackbox_mag_cal_generation + 1U;
+    if (W25Q64_EraseSector(&blackbox_flash, BLACKBOX_MAG_CAL_SECTOR) != W25Q64_STATUS_OK) return false;
+    ok = Blackbox_WriteMagCalSlot(BLACKBOX_MAG_CAL_SLOT_A_OFFSET, generation, status);
+    ok = Blackbox_WriteMagCalSlot(BLACKBOX_MAG_CAL_SLOT_B_OFFSET, generation, status) && ok;
+    if (ok)
+    {
+        blackbox_mag_cal_generation = generation;
+        blackbox_saved_mag_cal = *status;
+        blackbox_has_saved_mag_cal = true;
+    }
+    return ok;
+}
+
+static void Blackbox_HandleMagCalSave(void)
+{
+    MagCalibrationStatus_t status;
+
+    Mag_CalibrationGetStatus(&status);
+    if (!status.valid)
+    {
+        Debug_Printf("[MAG_CAL] flash skip, RAM offset is not valid.\r\n");
+        blackbox_mag_cal_save_pending = false;
+        return;
+    }
+    if (Blackbox_SaveMagCalibration(&status)) Debug_Printf("[MAG_CAL] flash saved gen=%lu offset=%.3f,%.3f,%.3f.\r\n", (unsigned long)blackbox_mag_cal_generation, (double)status.offset_mx_gauss, (double)status.offset_my_gauss, (double)status.offset_mz_gauss);
+    else Debug_Printf("[MAG_CAL] flash save failed, previous copy kept if present.\r\n");
+    blackbox_mag_cal_save_pending = false;
+}
+
+static bool Blackbox_QueueMagCalSave(void)
+{
+    if (!blackbox_ready) return false;
+    if (blackbox_recording) return false;
+    if (blackbox_mag_cal_save_pending) return false;
+    blackbox_mag_cal_save_pending = true;
+    if (!Blackbox_QueueJob(BLACKBOX_JOB_SAVE_MAG_CAL, NULL))
+    {
+        blackbox_mag_cal_save_pending = false;
+        return false;
+    }
     return true;
 }
 
@@ -766,7 +929,7 @@ static void Blackbox_PrintPidHeader(uint16_t session_id, uint32_t utc_seconds, c
         }
         (void)Debug_Send((const uint8_t *)line, (uint16_t)length);
     }
-    Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,vz_sp_cms,vz_corr_us,hover_us,alt_state,armed,conn\r\n");
+    Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,hover_us,alt_state,armed,conn\r\n");
 }
 
 static void Blackbox_PrintSample(const BlackboxFlashRecord_t *record)
@@ -806,7 +969,7 @@ static void Blackbox_PrintSample(const BlackboxFlashRecord_t *record)
         connected = record->bytes[41];
     }
 
-    Debug_Printf("%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%u,%u,%u,%u,%u,%d,%d,%d,%d,%u,%u,%u,%u\r\n", (unsigned long)record->sample.t_ms, (double)record->sample.roll_cdeg / 100.0, (double)record->sample.pitch_cdeg / 100.0, (double)record->sample.yaw_cdeg / 100.0, (double)record->sample.roll_rate_cdps / 100.0, (double)record->sample.pitch_rate_cdps / 100.0, (double)record->sample.yaw_rate_cdps / 100.0, (int)record->sample.roll_corr_us, (int)record->sample.pitch_corr_us, (int)record->sample.yaw_corr_us, (unsigned int)record->sample.throttle_us, (unsigned int)record->sample.motor_us[0], (unsigned int)record->sample.motor_us[1], (unsigned int)record->sample.motor_us[2], (unsigned int)record->sample.motor_us[3], (int)altitude_cm, (int)vz_cms, (int)target_vz_cms, (int)vz_correction_us, (unsigned int)hover_pwm_us, (unsigned int)altitude_state, (unsigned int)armed, (unsigned int)connected);
+    Debug_Printf("%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%u,%u,%u,%u,%u,%d,%d,%.2f,%d,%u,%u,%u,%u\r\n", (unsigned long)record->sample.t_ms, (double)record->sample.roll_cdeg / 100.0, (double)record->sample.pitch_cdeg / 100.0, (double)record->sample.yaw_cdeg / 100.0, (double)record->sample.roll_rate_cdps / 100.0, (double)record->sample.pitch_rate_cdps / 100.0, (double)record->sample.yaw_rate_cdps / 100.0, (int)record->sample.roll_corr_us, (int)record->sample.pitch_corr_us, (int)record->sample.yaw_corr_us, (unsigned int)record->sample.throttle_us, (unsigned int)record->sample.motor_us[0], (unsigned int)record->sample.motor_us[1], (unsigned int)record->sample.motor_us[2], (unsigned int)record->sample.motor_us[3], (int)altitude_cm, (int)vz_cms, (target_vz_cms < 0) ? -1.0 : ((double)target_vz_cms / 100.0), (int)vz_correction_us, (unsigned int)hover_pwm_us, (unsigned int)altitude_state, (unsigned int)armed, (unsigned int)connected);
 }
 
 static uint32_t Blackbox_DumpStartAddress(uint32_t max_records)
@@ -909,7 +1072,7 @@ static void Blackbox_DumpLogs(uint32_t max_records)
             if (!in_session && !printed_orphan_header)
             {
                 Debug_Printf("# session=0 t0_utc=NA unix=0\r\n");
-                Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,vz_sp_cms,vz_corr_us,hover_us,alt_state,armed,conn\r\n");
+                Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,hover_us,alt_state,armed,conn\r\n");
                 printed_orphan_header = true;
             }
             if (in_session || printed_orphan_header)
@@ -1015,6 +1178,51 @@ static uint32_t Blackbox_ParseOptionalCount(const char *text)
     return (uint32_t)strtoul(text, NULL, 10);
 }
 
+static void Blackbox_PrintMagCalibrationStatus(void)
+{
+    MagCalibrationStatus_t status;
+
+    Mag_CalibrationGetStatus(&status);
+    Debug_Printf("[MAG_CAL] active=%u valid=%u quality=%u samples=%lu span=%.3f,%.3f,%.3f offset=%.3f,%.3f,%.3f.\r\n", status.active ? 1U : 0U, status.valid ? 1U : 0U, status.quality_ok ? 1U : 0U, (unsigned long)status.sample_count, (double)status.span_mx_gauss, (double)status.span_my_gauss, (double)status.span_mz_gauss, (double)status.offset_mx_gauss, (double)status.offset_my_gauss, (double)status.offset_mz_gauss);
+}
+
+static void Blackbox_HandleMagCalibration(const char *cursor)
+{
+    MagCalibrationStatus_t status;
+
+    if (Blackbox_MatchToken(&cursor, "START"))
+    {
+        if (blackbox_recording)
+        {
+            Debug_Printf("[MAG_CAL] disarm first.\r\n");
+            return;
+        }
+        if (Mag_CalibrationStart()) Debug_Printf("[MAG_CAL] started; rotate all axes slowly, then send calmag stop.\r\n");
+        else Debug_Printf("[MAG_CAL] start fail; sensor is not ready or calibration is already active.\r\n");
+    }
+    else if (Blackbox_MatchToken(&cursor, "STOP"))
+    {
+        if (Mag_CalibrationStop(&status))
+        {
+            Debug_Printf("[MAG_CAL] done samples=%lu span=%.3f,%.3f,%.3f offset=%.3f,%.3f,%.3f.\r\n", (unsigned long)status.sample_count, (double)status.span_mx_gauss, (double)status.span_my_gauss, (double)status.span_mz_gauss, (double)status.offset_mx_gauss, (double)status.offset_my_gauss, (double)status.offset_mz_gauss);
+            if (Blackbox_QueueMagCalSave()) Debug_Printf("[MAG_CAL] queued flash save at 0x002000.\r\n");
+            else Debug_Printf("[MAG_CAL] RAM applied, flash save not queued; retry after dump/log idle.\r\n");
+        }
+        else
+        {
+            Mag_CalibrationGetStatus(&status);
+            Debug_Printf("[MAG_CAL] rejected samples=%lu span=%.3f,%.3f,%.3f; rotate farther on all 3 axes.\r\n", (unsigned long)status.sample_count, (double)status.span_mx_gauss, (double)status.span_my_gauss, (double)status.span_mz_gauss);
+        }
+    }
+    else if (Blackbox_MatchToken(&cursor, "STATUS")) Blackbox_PrintMagCalibrationStatus();
+    else if (Blackbox_MatchToken(&cursor, "CANCEL"))
+    {
+        Mag_CalibrationCancel();
+        Debug_Printf("[MAG_CAL] cancelled.\r\n");
+    }
+    else Debug_Printf("[MAG_CAL] use calmag start|stop|status|cancel.\r\n");
+}
+
 static void Blackbox_HandleCommandLine(void)
 {
     const char *cursor;
@@ -1031,8 +1239,9 @@ static void Blackbox_HandleCommandLine(void)
     else if (blackbox_dumping) Debug_Printf("[BB] busy, send stop first.\r\n");
     else if (Blackbox_MatchToken(&cursor, "DUMPALL")) Blackbox_DumpAllRaw(Blackbox_ParseOptionalCount(cursor));
     else if (Blackbox_MatchToken(&cursor, "DUMP")) Blackbox_DumpLogs(Blackbox_ParseOptionalCount(cursor));
-    else if (Blackbox_MatchToken(&cursor, "HELP")) Debug_Printf("[BB] commands: dump [N|all] dumpall [N|all] stop\r\n");
-    else Debug_Printf("[BB] unknown cmd, send dump dumpall or stop\r\n");
+    else if (Blackbox_MatchToken(&cursor, "CALMAG")) Blackbox_HandleMagCalibration(cursor);
+    else if (Blackbox_MatchToken(&cursor, "HELP")) Debug_Printf("[BB] commands: dump [N|all] dumpall [N|all] calmag start|stop|status|cancel stop\r\n");
+    else Debug_Printf("[BB] unknown cmd, send dump dumpall calmag or stop\r\n");
     blackbox_command_length = 0U;
     blackbox_command[0] = '\0';
 }
@@ -1098,7 +1307,11 @@ static bool Blackbox_Initialize(void)
     blackbox_ready = false;
     blackbox_recording = false;
     blackbox_save_pending = false;
+    blackbox_mag_cal_save_pending = false;
     blackbox_has_saved = false;
+    blackbox_has_saved_mag_cal = false;
+    blackbox_mag_cal_generation = 0U;
+    memset(&blackbox_saved_mag_cal, 0, sizeof(blackbox_saved_mag_cal));
     blackbox_dropped_samples = 0U;
     blackbox_parameter_generation = 0U;
     blackbox_next_session_id = 1U;
@@ -1120,6 +1333,8 @@ static bool Blackbox_Initialize(void)
     }
     if (Blackbox_ApplyBestSlot()) Debug_Printf("[BB] pid loaded gen=%lu.\r\n", (unsigned long)blackbox_parameter_generation);
     else Debug_Printf("[BB] no saved pid, using defaults.\r\n");
+    if (Blackbox_ApplyBestMagCalSlot()) Debug_Printf("[MAG_CAL] flash loaded gen=%lu.\r\n", (unsigned long)blackbox_mag_cal_generation);
+    else Debug_Printf("[MAG_CAL] no saved offset, heading stays uncalibrated.\r\n");
     /* 先放行 SAVE，再扫日志，避免上电 SPI 长扫描拖死电机任务。 */
     blackbox_ready = true;
     vTaskDelay(pdMS_TO_TICKS(50U));
@@ -1168,6 +1383,17 @@ bool Blackbox_RequestSave(void)
     return true;
 }
 
+bool Blackbox_RequestMagCalibrationSave(void)
+{
+    return Blackbox_QueueMagCalSave();
+}
+
+bool Blackbox_ApplySavedMagCalibration(void)
+{
+    if (!blackbox_has_saved_mag_cal) return false;
+    return Mag_CalibrationApplySaved(&blackbox_saved_mag_cal);
+}
+
 bool Blackbox_LoadSavedParameters(void)
 {
     if (!blackbox_ready || !blackbox_has_saved) return false;
@@ -1210,6 +1436,7 @@ void Blackbox_Task(void *argument)
             if (xQueueReceive(blackbox_queue, &job, pdMS_TO_TICKS(BLACKBOX_UART_POLL_MS)) == pdTRUE)
             {
                 if (job.type == BLACKBOX_JOB_SAVE) Blackbox_HandleSave();
+                else if (job.type == BLACKBOX_JOB_SAVE_MAG_CAL) Blackbox_HandleMagCalSave();
                 else if (job.type == BLACKBOX_JOB_ARM) Blackbox_HandleArm();
                 else if (job.type == BLACKBOX_JOB_DISARM) Blackbox_HandleDisarm();
                 else if ((job.type == BLACKBOX_JOB_SAMPLE) && blackbox_recording)

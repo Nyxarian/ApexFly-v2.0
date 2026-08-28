@@ -51,7 +51,7 @@ namespace ApexFlyBlackboxReader
             "roll_rate", "pitch_rate", "yaw_rate",
             "roll_corr", "pitch_corr", "yaw_corr",
             "thr", "m1", "m2", "m3", "m4",
-            "alt_cm", "vz_cms", "vz_sp_cms", "vz_corr_us", "hover_us", "alt_state"
+            "alt_cm", "vz_cms", "mag_hdg", "vz_corr_us", "hover_us", "alt_state"
         };
 
         private static readonly string[] CommandChannels =
@@ -61,7 +61,7 @@ namespace ApexFlyBlackboxReader
 
         private static readonly string[] AttitudeChannels =
         {
-            "roll", "pitch", "yaw", "roll_rate", "pitch_rate", "yaw_rate", "alt_cm", "vz_cms", "vz_sp_cms"
+            "roll", "pitch", "yaw", "roll_rate", "pitch_rate", "yaw_rate", "alt_cm", "vz_cms", "mag_hdg"
         };
 
         public WaveformForm(string csvPath, string titleText)
@@ -136,14 +136,14 @@ namespace ApexFlyBlackboxReader
                     }
                     if (parts.Length >= offset + 23)
                     {
-                        AddValue("vz_sp_cms", parts, offset + 17);
+                        AddValue("mag_hdg", parts, offset + 17);
                         AddValue("vz_corr_us", parts, offset + 18);
                         AddValue("hover_us", parts, offset + 19);
                         AddValue("alt_state", parts, offset + 20);
                     }
                     else
                     {
-                        series["vz_sp_cms"].Add(0f);
+                        series["mag_hdg"].Add(0f);
                         series["vz_corr_us"].Add(0f);
                         series["hover_us"].Add(0f);
                         series["alt_state"].Add(0f);
@@ -215,7 +215,7 @@ namespace ApexFlyBlackboxReader
             colors["m4"] = Color.FromArgb(255, 220, 80);
             colors["alt_cm"] = Color.FromArgb(120, 220, 255);
             colors["vz_cms"] = Color.FromArgb(255, 180, 90);
-            colors["vz_sp_cms"] = Color.FromArgb(120, 255, 150);
+            colors["mag_hdg"] = Color.FromArgb(120, 255, 150);
             colors["vz_corr_us"] = Color.FromArgb(255, 120, 180);
             colors["hover_us"] = Color.FromArgb(210, 210, 210);
             colors["alt_state"] = Color.FromArgb(180, 140, 255);
@@ -236,7 +236,7 @@ namespace ApexFlyBlackboxReader
             labels["m4"] = "M4";
             labels["alt_cm"] = "高度cm";
             labels["vz_cms"] = "实际垂速";
-            labels["vz_sp_cms"] = "目标垂速";
+            labels["mag_hdg"] = "磁航向";
             labels["vz_corr_us"] = "垂速修正";
             labels["hover_us"] = "悬停PWM";
             labels["alt_state"] = "高度状态";

@@ -5,6 +5,7 @@
  * 增益和限幅改完后只刷新 Pid_t 的数字并 Reset 积分，不重新 Init 整轴以外的状态机。
  * trim 先存着给 GET/SET 显示，不送进控制目标角。
  * APEX_PID_HOVER_PWM_US 表示满杆油门上限；垂速 PID 项仍可读写，但不再参与电机输出。
+ * MAG_CAL_STOP 成功后由黑匣子把硬铁偏移写入 0x002000；失败不覆盖旧值。
  */
 
 #include "pid_table.h"
@@ -13,6 +14,7 @@
 #include "altitude_control.h"
 #include "blackbox.h"
 #include "FreeRTOS.h"
+#include "mag.h"
 #include "task.h"
 #include <stddef.h>
 #include <string.h>
@@ -273,6 +275,19 @@ uint16_t PidTable_GetMaxThrottleUs(void)
     return (uint16_t)(max_throttle_us + 0.5f);
 }
 
+void PidTable_GetAttitudeTrimDeg(float *roll_trim_deg, float *pitch_trim_deg)
+{
+    float roll_trim;
+    float pitch_trim;
+
+    taskENTER_CRITICAL();
+    roll_trim = pid_table.roll_trim_deg;
+    pitch_trim = pid_table.pitch_trim_deg;
+    taskEXIT_CRITICAL();
+    if (roll_trim_deg != NULL) *roll_trim_deg = roll_trim;
+    if (pitch_trim_deg != NULL) *pitch_trim_deg = pitch_trim;
+}
+
 static void PidTable_LoadCompiledDefaults(void)
 {
     taskENTER_CRITICAL();
@@ -390,9 +405,46 @@ void PidTable_HandleCommand(const ApexPidCommand_t *command, bool armed, ApexPid
         PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_OK);
         return;
 
-    case APEX_PID_OPERATION_ACCEL_CAL_SAMPLE:
-    case APEX_PID_OPERATION_ACCEL_CAL_FINISH:
-    case APEX_PID_OPERATION_ACCEL_CAL_CANCEL:
+    case APEX_PID_OPERATION_MAG_CAL_START:
+        if (armed)
+        {
+            PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_LOCKED_REQUIRED);
+            return;
+        }
+        /* 开始校准不写 Flash。这里借用 STORAGE_NOT_READY 表示磁力计还没识别到芯片。 */
+        status = Mag_CalibrationStart() ? APEX_PID_STATUS_OK : APEX_PID_STATUS_STORAGE_NOT_READY;
+        PidTable_FillResponse(response, command->sequence, command->operation, status);
+        return;
+
+    case APEX_PID_OPERATION_MAG_CAL_STOP:
+        if (armed)
+        {
+            PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_LOCKED_REQUIRED);
+            return;
+        }
+        /* 覆盖不足时回超出范围，遥控据此提示继续转圈；成功后再排队写 Flash。 */
+        if (!Mag_CalibrationStop(NULL))
+        {
+            PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_OUT_OF_RANGE);
+            return;
+        }
+        if (!Blackbox_IsReady())
+        {
+            PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_STORAGE_NOT_READY);
+            return;
+        }
+        status = Blackbox_RequestMagCalibrationSave() ? APEX_PID_STATUS_OK : APEX_PID_STATUS_STORAGE_ERROR;
+        PidTable_FillResponse(response, command->sequence, command->operation, status);
+        return;
+
+    case APEX_PID_OPERATION_MAG_CAL_CANCEL:
+        Mag_CalibrationCancel();
+        PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_OK);
+        return;
+
+    case APEX_PID_OPERATION_RESERVED_5:
+    case APEX_PID_OPERATION_RESERVED_6:
+    case APEX_PID_OPERATION_RESERVED_7:
     default:
         PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_INVALID_OPERATION);
         return;
