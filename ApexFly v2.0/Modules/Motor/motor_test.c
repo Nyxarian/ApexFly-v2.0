@@ -48,6 +48,15 @@
 #define MOTOR_DT_MAX_S 0.03f
 #define MOTOR_ATTITUDE_ENABLE_PWM_US 1050U
 
+/* 微秒时基：用 DWT 周期计数器。170MHz 下 CYCCNT 约 25s 回绕，
+   dt 的差值必须在原始计数器域做无符号减法（先除再减会在回绕处出错）。 */
+static void MotorTest_TimebaseInit(void)
+{
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0U;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
 /**
  * @brief 把混控算出的四路脉宽写到对应电机。
  */
@@ -140,10 +149,11 @@ void MotorTest_Task(void *argument)
     bool armed;
     bool was_armed;
     uint16_t throttle_us;
-    uint32_t last_imu_tick;
+    uint32_t last_imu_cycles;
     uint32_t next_battery_tick;
-    uint32_t imu_tick;
+    uint32_t imu_cycles;
     uint32_t next_tick;
+    uint32_t dt_us;
     float control_dt_s;
     float roll_corr_us;
     float pitch_corr_us;
@@ -156,6 +166,7 @@ void MotorTest_Task(void *argument)
     float pitch_trim_deg;
 
     (void)argument;
+    MotorTest_TimebaseInit();
     PidTable_Init();
     Battery_Init();
     memset(&body, 0, sizeof(body));
@@ -198,7 +209,7 @@ void MotorTest_Task(void *argument)
         bias_ready = false;
         level_ready = false;
         was_armed = false;
-        last_imu_tick = 0U;
+        last_imu_cycles = 0U;
         next_battery_tick = osKernelGetTickCount();
         next_tick = osKernelGetTickCount() + IMU_SAMPLE_PERIOD_MS;
         control_dt_s = IMU_DELTA_TIME_S;
@@ -206,8 +217,9 @@ void MotorTest_Task(void *argument)
         for (;;)
         {
             /* 等到本拍的计划时刻，保证周期稳定、不受单拍耗时影响；
-               落后超过一拍时重新对齐，避免积压后连续追赶。 */
-            if ((uint32_t)(osKernelGetTickCount() - next_tick) > IMU_SAMPLE_PERIOD_MS)
+               落后超过一拍时重新对齐，避免积压后连续追赶。
+               注意：这里必须用有符号差值判断，无符号相减在“尚未到点”时会被误判为落后。 */
+            if ((int32_t)(osKernelGetTickCount() - next_tick) > (int32_t)IMU_SAMPLE_PERIOD_MS)
             {
                 next_tick = osKernelGetTickCount();
             }
@@ -236,9 +248,14 @@ void MotorTest_Task(void *argument)
                 continue;
             }
 
-            imu_tick = osKernelGetTickCount();
-            if (last_imu_tick != 0U) control_dt_s = MotorTest_Clampf((float)(imu_tick - last_imu_tick) * 0.001f, MOTOR_DT_MIN_S, MOTOR_DT_MAX_S);
-            last_imu_tick = imu_tick;
+            imu_cycles = DWT->CYCCNT;
+            if (last_imu_cycles != 0U)
+            {
+                /* 先在原始计数器域做无符号减法（天然处理回绕），再换算成微秒。 */
+                dt_us = (uint32_t)(imu_cycles - last_imu_cycles) / (SystemCoreClock / 1000000U);
+                control_dt_s = MotorTest_Clampf((float)dt_us * 0.000001f, MOTOR_DT_MIN_S, MOTOR_DT_MAX_S);
+            }
+            last_imu_cycles = imu_cycles;
 
             /* 控制环内禁止任何阻塞打印：每拍约 6ms 的串口发送会把 100Hz 拖到 60Hz 且抖动。
                需要观察 IMU 数据时看黑匣子样本，或在本文件外临时挂调试代码。 */
