@@ -81,7 +81,7 @@ const osThreadAttr_t imuTestTask_attributes = {
 osThreadId_t motorTestTaskHandle;
 const osThreadAttr_t motorTestTask_attributes = {
   .name = "motorTestTask",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityHigh,
   .stack_size = 640 * 4
 };
 /* Definitions for ledTask */

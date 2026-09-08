@@ -98,8 +98,6 @@ typedef struct
     float gyro_y_dps;
     /* Z 轴角速度，单位为度每秒。 */
     float gyro_z_dps;
-    /* 本组样本的采样时间戳，单位为毫秒（HAL_GetTick）；用于计算真实的采样间隔。 */
-    uint32_t timestamp_ms;
 } MPU6050_Data_t;
 
 /**
@@ -115,8 +113,6 @@ typedef struct
     uint16_t address;
     /* true 表示初始化全部成功，false 表示暂时不能读取正式数据。 */
     bool initialized;
-    /* 最近一次成功读取数据样本的系统时间戳，单位为毫秒（HAL_GetTick）。 */
-    uint32_t last_timestamp_ms;
     /* 自设备初始化以来累计的 I2C 传输失败次数，用于统计总线健康度。 */
     uint32_t i2c_error_count;
 } MPU6050_Device_t;
@@ -152,13 +148,6 @@ MPU6050_Status_t MPU6050_ReadRaw(MPU6050_Device_t *device, MPU6050_RawData_t *ra
  * @return 数据读取与换算状态。
  */
 MPU6050_Status_t MPU6050_ReadData(MPU6050_Device_t *device, MPU6050_Data_t *data);
-
-/**
- * @brief 获取最近一次成功读取数据样本的时间戳。
- * @param device 设备对象地址。
- * @return 最近一次成功读取的采样时间戳，单位为毫秒。
- */
-uint32_t MPU6050_GetLastTimestampMs(const MPU6050_Device_t *device);
 
 /**
  * @brief 获取自设备初始化以来累计的 I2C 传输错误次数。

@@ -347,19 +347,7 @@ MPU6050_Status_t MPU6050_ReadData(MPU6050_Device_t *device, MPU6050_Data_t *data
     /* 正负 2000 度每秒量程下，原始值除以 16.4 得到 Z 轴角速度。 */
     data->gyro_z_dps = (float)raw_data.gyro_z / MPU6050_GYRO_SCALE_2000DPS;
 
-    /* 数据读取和单位换算全部完成，记录采样时间戳供上层计算真实采样间隔。 */
-    data->timestamp_ms = HAL_GetTick();
-    device->last_timestamp_ms = data->timestamp_ms;
     return MPU6050_STATUS_OK;
-}
-
-/**
- * @brief 获取最近一次成功读取数据样本的时间戳。
- */
-uint32_t MPU6050_GetLastTimestampMs(const MPU6050_Device_t *device)
-{
-    if (device == NULL) return 0U;
-    return device->last_timestamp_ms;
 }
 
 /**
