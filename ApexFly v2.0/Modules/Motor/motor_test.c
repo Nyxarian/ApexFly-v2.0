@@ -39,7 +39,7 @@
 #include <string.h>
 
 #define ESC_ARM_WAIT_MS 3000U
-#define IMU_BIAS_SAMPLE_COUNT 200U
+#define IMU_BIAS_SAMPLE_COUNT 500U
 #define IMU_LEVEL_SAMPLE_COUNT 200U
 #define IMU_SAMPLE_PERIOD_MS 10U
 #define IMU_DELTA_TIME_S 0.01f
@@ -96,6 +96,24 @@ static float MotorTest_Clampf(float value, float minimum, float maximum)
     if (value < minimum) return minimum;
     if (value > maximum) return maximum;
     return value;
+}
+
+static float MotorTest_Absf(float value)
+{
+    return (value < 0.0f) ? -value : value;
+}
+
+/* 水平零点采集门禁：机体必须静止、接近水平、加计模长正常。
+   任一不满足就清空累加器重新开始，避免把斜放或晃动采成永久零点。 */
+static bool MotorTest_LevelSampleValid(const MPU6050_Data_t *data, const IMU_BodyAttitude_t *body)
+{
+    float accel_norm_sq;
+
+    accel_norm_sq = (data->accel_x_g * data->accel_x_g) + (data->accel_y_g * data->accel_y_g) + (data->accel_z_g * data->accel_z_g);
+    if ((accel_norm_sq < 0.9025f) || (accel_norm_sq > 1.2100f)) return false;
+    if ((MotorTest_Absf(body->roll_deg) > 8.0f) || (MotorTest_Absf(body->pitch_deg) > 8.0f)) return false;
+    if ((MotorTest_Absf(data->gyro_x_dps) > 2.0f) || (MotorTest_Absf(data->gyro_y_dps) > 2.0f) || (MotorTest_Absf(data->gyro_z_dps) > 2.0f)) return false;
+    return true;
 }
 
 static int16_t MotorTest_MagHeadingCdeg(bool *calibration_valid)
@@ -249,6 +267,9 @@ void MotorTest_Task(void *argument)
 
             if (!bias_ready)
             {
+                /* 采集期间也发布一次状态，让遥控器看到 IMU 尚未就绪。 */
+                Radio_PublishFlightState(0.0f, 0.0f, 0.0f, MOTOR_PWM_MIN_US, 0, 0, false, true, false);
+
                 if (!IMU_GyroBias_Update(&bias_collector, &imu_data))
                 {
                     continue;
@@ -280,6 +301,13 @@ void MotorTest_Task(void *argument)
 
             if (!level_ready)
             {
+                if (!MotorTest_LevelSampleValid(&imu_data, &body))
+                {
+                    /* 门禁不通过：清空累加器重来，避免斜放/晃动污染零点。 */
+                    IMU_Level_Start(&level_collector, IMU_LEVEL_SAMPLE_COUNT);
+                    continue;
+                }
+
                 if (!IMU_Level_Update(&level_collector, &body))
                 {
                     continue;

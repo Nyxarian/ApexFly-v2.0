@@ -17,6 +17,14 @@
 extern "C" {
 #endif
 
+/* 零偏采集被门禁清零的原因，仅诊断用。 */
+typedef enum
+{
+    IMU_BIAS_RESTART_NONE = 0, /* 未触发门禁。 */
+    IMU_BIAS_RESTART_ACCEL,    /* 加计模长越界：机体未放平或正在移动。 */
+    IMU_BIAS_RESTART_GYRO      /* 相邻两拍角速度跳变过大：机体在动。 */
+} IMU_BiasRestartReason_t;
+
 typedef struct
 {
     /* X 轴陀螺仪零偏，单位度每秒。 */
@@ -43,6 +51,14 @@ typedef struct
     uint32_t target_sample_count;
     /* true 表示本轮已经结束，不再继续累加。 */
     bool finished;
+    /* 上一拍角速度，用于静止检测（逐拍变化门禁）。 */
+    float last_gyro_x_dps;
+    float last_gyro_y_dps;
+    float last_gyro_z_dps;
+    /* 最近一次门禁触发时的三轴最大跳变量，单位度每秒，仅诊断用。 */
+    float last_jump_dps;
+    /* 最近一次被门禁清零的原因。 */
+    uint8_t last_restart_reason;
     /* 采集完成后的零偏结果。 */
     IMU_GyroBias_t bias;
 } IMU_GyroBiasCollector_t;
