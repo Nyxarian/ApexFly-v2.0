@@ -34,8 +34,10 @@
 #define MPU6050_REG_WHO_AM_I 0x75U
 /* AD0 接地时正确的 WHO_AM_I 返回值。 */
 #define MPU6050_WHO_AM_I_VALUE 0x68U
-/* 单次阻塞 I2C 操作的最大等待时间，单位为毫秒。 */
-#define MPU6050_I2C_TIMEOUT_MS 20U
+/* 单次阻塞 I2C 操作的最大等待时间，单位为毫秒。
+   400kHz 下读 14 字节约 0.4ms，5ms 留足余量；且必须远小于 10ms 控制周期，
+   否则一次总线异常会让控制环跨拍停摆。 */
+#define MPU6050_I2C_TIMEOUT_MS 5U
 
 /**
  * @brief 向 MPU6050 的一个寄存器写入一个字节。
@@ -210,8 +212,8 @@ MPU6050_Status_t MPU6050_Init(MPU6050_Device_t *device, I2C_HandleTypeDef *i2c)
         return status;
     }
 
-    /* 设置 FS_SEL=3，将陀螺仪量程配置为正负 2000 度每秒。 */
-    status = MPU6050_WriteRegister(device, MPU6050_REG_GYRO_CONFIG, 0x18U);
+    /* 设置 FS_SEL=2，将陀螺仪量程配置为正负 1000 度每秒。 */
+    status = MPU6050_WriteRegister(device, MPU6050_REG_GYRO_CONFIG, 0x10U);
     /* 检查陀螺仪量程配置。 */
     if (status != MPU6050_STATUS_OK)
     {
@@ -219,8 +221,8 @@ MPU6050_Status_t MPU6050_Init(MPU6050_Device_t *device, I2C_HandleTypeDef *i2c)
         return status;
     }
 
-    /* 设置 AFS_SEL=2，将加速度计量程配置为正负 8g。 */
-    status = MPU6050_WriteRegister(device, MPU6050_REG_ACCEL_CONFIG, 0x10U);
+    /* 设置 AFS_SEL=1，将加速度计量程配置为正负 4g。 */
+    status = MPU6050_WriteRegister(device, MPU6050_REG_ACCEL_CONFIG, 0x08U);
     /* 检查加速度计量程配置。 */
     if (status != MPU6050_STATUS_OK)
     {
@@ -332,20 +334,20 @@ MPU6050_Status_t MPU6050_ReadData(MPU6050_Device_t *device, MPU6050_Data_t *data
         return status;
     }
 
-    /* 正负 8g 量程下，原始值除以 4096 得到 X 轴加速度。 */
-    data->accel_x_g = (float)raw_data.accel_x / MPU6050_ACCEL_SCALE_8G;
-    /* 正负 8g 量程下，原始值除以 4096 得到 Y 轴加速度。 */
-    data->accel_y_g = (float)raw_data.accel_y / MPU6050_ACCEL_SCALE_8G;
-    /* 正负 8g 量程下，原始值除以 4096 得到 Z 轴加速度。 */
-    data->accel_z_g = (float)raw_data.accel_z / MPU6050_ACCEL_SCALE_8G;
+    /* 正负 4g 量程下，原始值除以 8192 得到 X 轴加速度。 */
+    data->accel_x_g = (float)raw_data.accel_x / MPU6050_ACCEL_SCALE_4G;
+    /* 正负 4g 量程下，原始值除以 8192 得到 Y 轴加速度。 */
+    data->accel_y_g = (float)raw_data.accel_y / MPU6050_ACCEL_SCALE_4G;
+    /* 正负 4g 量程下，原始值除以 8192 得到 Z 轴加速度。 */
+    data->accel_z_g = (float)raw_data.accel_z / MPU6050_ACCEL_SCALE_4G;
     /* 按数据手册公式把内部温度原始值转换为摄氏度。 */
     data->temperature_c = (float)raw_data.temperature / 340.0f + 36.53f;
-    /* 正负 2000 度每秒量程下，原始值除以 16.4 得到 X 轴角速度。 */
-    data->gyro_x_dps = (float)raw_data.gyro_x / MPU6050_GYRO_SCALE_2000DPS;
-    /* 正负 2000 度每秒量程下，原始值除以 16.4 得到 Y 轴角速度。 */
-    data->gyro_y_dps = (float)raw_data.gyro_y / MPU6050_GYRO_SCALE_2000DPS;
-    /* 正负 2000 度每秒量程下，原始值除以 16.4 得到 Z 轴角速度。 */
-    data->gyro_z_dps = (float)raw_data.gyro_z / MPU6050_GYRO_SCALE_2000DPS;
+    /* 正负 1000 度每秒量程下，原始值除以 32.8 得到 X 轴角速度。 */
+    data->gyro_x_dps = (float)raw_data.gyro_x / MPU6050_GYRO_SCALE_1000DPS;
+    /* 正负 1000 度每秒量程下，原始值除以 32.8 得到 Y 轴角速度。 */
+    data->gyro_y_dps = (float)raw_data.gyro_y / MPU6050_GYRO_SCALE_1000DPS;
+    /* 正负 1000 度每秒量程下，原始值除以 32.8 得到 Z 轴角速度。 */
+    data->gyro_z_dps = (float)raw_data.gyro_z / MPU6050_GYRO_SCALE_1000DPS;
 
     return MPU6050_STATUS_OK;
 }

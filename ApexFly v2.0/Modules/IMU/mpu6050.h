@@ -27,10 +27,10 @@ extern "C" {
 #define MPU6050_ADDRESS_7BIT 0x68U
 /* STM32 HAL 要求设备地址左移一位，所以实际传入 HAL 的地址为 0xD0。 */
 #define MPU6050_ADDRESS_HAL (MPU6050_ADDRESS_7BIT << 1U)
-/* 加速度计配置为正负 8g 时，每 1g 对应 4096 个原始计数。 */
-#define MPU6050_ACCEL_SCALE_8G 4096.0f
-/* 陀螺仪配置为正负 2000 度每秒时，每 1 度每秒对应 16.4 个原始计数。 */
-#define MPU6050_GYRO_SCALE_2000DPS 16.4f
+/* 加速度计配置为正负 4g 时，每 1g 对应 8192 个原始计数。 */
+#define MPU6050_ACCEL_SCALE_4G 8192.0f
+/* 陀螺仪配置为正负 1000 度每秒时，每 1 度每秒对应 32.8 个原始计数。 */
+#define MPU6050_GYRO_SCALE_1000DPS 32.8f
 
 /**
  * @brief MPU6050 驱动函数返回状态。

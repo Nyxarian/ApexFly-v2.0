@@ -47,6 +47,8 @@
 #define MOTOR_DT_MIN_S 0.005f
 #define MOTOR_DT_MAX_S 0.03f
 #define MOTOR_ATTITUDE_ENABLE_PWM_US 1050U
+/* I2C 连续失败多少次才判定总线真故障并上锁重初始化（20 拍 = 200ms）。 */
+#define MOTOR_I2C_FAIL_LIMIT 20U
 
 /* 微秒时基：用 DWT 周期计数器。170MHz 下 CYCCNT 约 25s 回绕，
    dt 的差值必须在原始计数器域做无符号减法（先除再减会在回绕处出错）。 */
@@ -154,6 +156,7 @@ void MotorTest_Task(void *argument)
     uint32_t imu_cycles;
     uint32_t next_tick;
     uint32_t dt_us;
+    uint32_t i2c_fail_streak;
     float control_dt_s;
     float roll_corr_us;
     float pitch_corr_us;
@@ -213,6 +216,7 @@ void MotorTest_Task(void *argument)
         next_battery_tick = osKernelGetTickCount();
         next_tick = osKernelGetTickCount() + IMU_SAMPLE_PERIOD_MS;
         control_dt_s = IMU_DELTA_TIME_S;
+        i2c_fail_streak = 0U;
     
         for (;;)
         {
@@ -229,11 +233,19 @@ void MotorTest_Task(void *argument)
             status = MPU6050_ReadData(&imu_device, &imu_data);
             if (status != MPU6050_STATUS_OK)
             {
+                /* 单次 I2C 错误只丢本拍：电机保持上一拍输出，下一拍自动重试。
+                   连续多次失败才认为总线真故障，走上锁保护并重新初始化 IMU。 */
+                i2c_fail_streak++;
+                if (i2c_fail_streak < MOTOR_I2C_FAIL_LIMIT)
+                {
+                    continue;
+                }
                 if (was_armed) Blackbox_NotifyDisarmed();
                 Motor_Disarm();
                 Radio_PublishFlightState(0.0f, 0.0f, 0.0f, MOTOR_PWM_MIN_US, 0, 0, false, true, false);
                 break;
             }
+            i2c_fail_streak = 0U;
 
             if (!bias_ready)
             {
