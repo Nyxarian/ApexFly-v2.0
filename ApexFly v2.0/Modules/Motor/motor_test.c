@@ -143,6 +143,7 @@ void MotorTest_Task(void *argument)
     uint32_t last_imu_tick;
     uint32_t next_battery_tick;
     uint32_t imu_tick;
+    uint32_t next_tick;
     float control_dt_s;
     float roll_corr_us;
     float pitch_corr_us;
@@ -199,10 +200,20 @@ void MotorTest_Task(void *argument)
         was_armed = false;
         last_imu_tick = 0U;
         next_battery_tick = osKernelGetTickCount();
+        next_tick = osKernelGetTickCount() + IMU_SAMPLE_PERIOD_MS;
         control_dt_s = IMU_DELTA_TIME_S;
     
         for (;;)
         {
+            /* 等到本拍的计划时刻，保证周期稳定、不受单拍耗时影响；
+               落后超过一拍时重新对齐，避免积压后连续追赶。 */
+            if ((uint32_t)(osKernelGetTickCount() - next_tick) > IMU_SAMPLE_PERIOD_MS)
+            {
+                next_tick = osKernelGetTickCount();
+            }
+            (void)osDelayUntil(next_tick);
+            next_tick += IMU_SAMPLE_PERIOD_MS;
+
             status = MPU6050_ReadData(&imu_device, &imu_data);
             if (status != MPU6050_STATUS_OK)
             {
@@ -216,7 +227,6 @@ void MotorTest_Task(void *argument)
             {
                 if (!IMU_GyroBias_Update(&bias_collector, &imu_data))
                 {
-                    osDelay(IMU_SAMPLE_PERIOD_MS);
                     continue;
                 }
 
@@ -230,10 +240,11 @@ void MotorTest_Task(void *argument)
             if (last_imu_tick != 0U) control_dt_s = MotorTest_Clampf((float)(imu_tick - last_imu_tick) * 0.001f, MOTOR_DT_MIN_S, MOTOR_DT_MAX_S);
             last_imu_tick = imu_tick;
 
+            /* 控制环内禁止任何阻塞打印：每拍约 6ms 的串口发送会把 100Hz 拖到 60Hz 且抖动。
+               需要观察 IMU 数据时看黑匣子样本，或在本文件外临时挂调试代码。 */
             IMU_GyroBias_Apply(&bias_collector.bias, &imu_data);
             if (!IMU_Attitude_Update(&attitude, &imu_data, control_dt_s))
             {
-                osDelay(IMU_SAMPLE_PERIOD_MS);
                 continue;
             }
             IMU_Attitude_MapToBody(&attitude, &imu_data, &body);
@@ -242,7 +253,6 @@ void MotorTest_Task(void *argument)
             {
                 if (!IMU_Level_Update(&level_collector, &body))
                 {
-                    osDelay(IMU_SAMPLE_PERIOD_MS);
                     continue;
                 }
 
@@ -342,8 +352,6 @@ void MotorTest_Task(void *argument)
             was_armed = armed;
 
             Radio_PublishFlightState(body.roll_deg, body.pitch_deg, body.yaw_deg, throttle_us, altitude_cm, vz_cms, true, true, armed);
-
-            osDelay(IMU_SAMPLE_PERIOD_MS);
         }
     }
 }

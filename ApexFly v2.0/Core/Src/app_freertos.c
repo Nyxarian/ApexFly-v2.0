@@ -77,13 +77,6 @@ const osThreadAttr_t imuTestTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 512 * 4
 };
-/* Definitions for attitudeDebugTask */
-osThreadId_t attitudeDebugTaskHandle;
-const osThreadAttr_t attitudeDebugTask_attributes = {
-  .name = "attitudeDebugTask",
-  .priority = (osPriority_t) osPriorityBelowNormal,
-  .stack_size = 384 * 4
-};
 /* Definitions for motorTestTask */
 osThreadId_t motorTestTaskHandle;
 const osThreadAttr_t motorTestTask_attributes = {
@@ -112,24 +105,17 @@ const osThreadAttr_t blackboxTask_attributes = {
   .priority = (osPriority_t) osPriorityBelowNormal,
   .stack_size = 768 * 4
 };
-/* Definitions for baroTask */
-osThreadId_t baroTaskHandle;
-const osThreadAttr_t baroTask_attributes = {
-  .name = "baroTask",
+/* Definitions for magtask */
+osThreadId_t magtaskHandle;
+const osThreadAttr_t magtask_attributes = {
+  .name = "magtask",
   .priority = (osPriority_t) osPriorityBelowNormal,
-  .stack_size = 768 * 4
+  .stack_size = 512 * 4
 };
 /* Definitions for gpsTask */
 osThreadId_t gpsTaskHandle;
 const osThreadAttr_t gpsTask_attributes = {
   .name = "gpsTask",
-  .priority = (osPriority_t) osPriorityBelowNormal,
-  .stack_size = 512 * 4
-};
-/* Definitions for magTask */
-osThreadId_t magTaskHandle;
-const osThreadAttr_t magTask_attributes = {
-  .name = "magTask",
   .priority = (osPriority_t) osPriorityBelowNormal,
   .stack_size = 512 * 4
 };
@@ -141,14 +127,12 @@ const osThreadAttr_t magTask_attributes = {
 
 void StartDefaultTask(void *argument);
 void StartImuTestTask(void *argument);
-void StartAttitudeDebugTask(void *argument);
 void StartMotorTestTask(void *argument);
 void StartLedTask(void *argument);
 void StartRadioTask(void *argument);
 void StartBlackboxTask(void *argument);
-void StartBaroTask(void *argument);
-void StartGpsTask(void *argument);
 void StartMagTask(void *argument);
+void StartGpsTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -203,9 +187,6 @@ void MX_FREERTOS_Init(void) {
   /* creation of imuTestTask */
   imuTestTaskHandle = osThreadNew(StartImuTestTask, NULL, &imuTestTask_attributes);
 
-  /* creation of attitudeDebugTask */
-  attitudeDebugTaskHandle = osThreadNew(StartAttitudeDebugTask, NULL, &attitudeDebugTask_attributes);
-
   /* creation of motorTestTask */
   motorTestTaskHandle = osThreadNew(StartMotorTestTask, NULL, &motorTestTask_attributes);
 
@@ -218,14 +199,11 @@ void MX_FREERTOS_Init(void) {
   /* creation of blackboxTask */
   blackboxTaskHandle = osThreadNew(StartBlackboxTask, NULL, &blackboxTask_attributes);
 
-  /* 气压计任务停用，I2C2 只给磁力计。源码保留，不创建线程。 */
-  baroTaskHandle = NULL;
+  /* creation of magtask */
+  magtaskHandle = osThreadNew(StartMagTask, NULL, &magtask_attributes);
 
   /* creation of gpsTask */
   gpsTaskHandle = osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
-
-  /* creation of magTask */
-  magTaskHandle = osThreadNew(StartMagTask, NULL, &magTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -286,20 +264,6 @@ void StartImuTestTask(void *argument)
   /* USER CODE END StartImuTestTask */
 }
 
-/* USER CODE BEGIN Header_StartAttitudeDebugTask */
-/**
-  * @brief  姿态角调试串口任务，每100ms输出一次Roll、Pitch0000、Yaw。
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_StartAttitudeDebugTask */
-void StartAttitudeDebugTask(void *argument)
-{
-  /* USER CODE BEGIN StartAttitudeDebugTask */
-  AttitudeDebug_Task(argument);
-  /* USER CODE END StartAttitudeDebugTask */
-}
-
 /* USER CODE BEGIN Header_StartMotorTestTask */
 /**
   * @brief  遥控油门跟杆任务。
@@ -346,9 +310,13 @@ void StartRadioTask(void *argument)
   /* USER CODE END StartRadioTask */
 }
 
+/* USER CODE BEGIN Header_StartBlackboxTask */
 /**
-  * @brief  黑匣子任务。独占 SPI3，写 PID 双备份和场次日志，串口 dump 导出 CSV。
-  */
+* @brief Function implementing the blackboxTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartBlackboxTask */
 void StartBlackboxTask(void *argument)
 {
   /* USER CODE BEGIN StartBlackboxTask */
@@ -356,33 +324,13 @@ void StartBlackboxTask(void *argument)
   /* USER CODE END StartBlackboxTask */
 }
 
-/**
-  * @brief  气压任务入口保留，当前不创建该线程，I2C2 只给磁力计。
-  */
-void StartBaroTask(void *argument)
-{
-  /* USER CODE BEGIN StartBaroTask */
-  (void)argument;
-  for (;;)
-  {
-    osDelay(1000U);
-  }
-  /* USER CODE END StartBaroTask */
-}
-
-/**
-  * @brief  GPS 任务。独占 USART2 上的 ATGM336H，解析 NMEA，给黑匣子提供 UTC 时间。
-  */
-void StartGpsTask(void *argument)
-{
-  /* USER CODE BEGIN StartGpsTask */
-  GPS_Task(argument);
-  /* USER CODE END StartGpsTask */
-}
-
+/* USER CODE BEGIN Header_StartMagTask */
 /**
   * @brief  磁力计任务。I2C2 读 GY-273，只发布磁场快照，不进姿态环。
+  * @param  argument: Not used
+  * @retval None
   */
+/* USER CODE END Header_StartMagTask */
 void StartMagTask(void *argument)
 {
   /* USER CODE BEGIN StartMagTask */
@@ -390,7 +338,22 @@ void StartMagTask(void *argument)
   /* USER CODE END StartMagTask */
 }
 
+/* USER CODE BEGIN Header_StartGpsTask */
+/**
+  * @brief  GPS 任务。独占 USART2 上的 ATGM336H，解析 NMEA，给黑匣子提供 UTC 时间。
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartGpsTask */
+void StartGpsTask(void *argument)
+{
+  /* USER CODE BEGIN StartGpsTask */
+  GPS_Task(argument);
+  /* USER CODE END StartGpsTask */
+}
+
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
 
 /* USER CODE END Application */
+

@@ -22,6 +22,30 @@ ApexFly v2.0/MDK-ARM/build/
 ApexFly v2.0/MDK-ARM/listing/
 ApexFly v2.0/MDK-ARM/output/
 
+# ApexFly v3.0 Keil 编译产物
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.o
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.d
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.crf
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.axf
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.hex
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.bin
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.htm
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.lnp
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.sct.bak
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.dep
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.map
+ApexFly v3.0/MDK-ARM/ApexFly v3.0/*.build_log.htm
+ApexFly v3.0/MDK-ARM/*.uvguix.*
+ApexFly v3.0/MDK-ARM/*.uvoptx.bak
+ApexFly v3.0/MDK-ARM/JLinkLog.txt
+ApexFly v3.0/MDK-ARM/EventRecorderStub.scvd
+ApexFly v3.0/MDK-ARM/DebugConfig/
+ApexFly v3.0/MDK-ARM/RTE/
+ApexFly v3.0/MDK-ARM/.cmsis/
+ApexFly v3.0/MDK-ARM/build/
+ApexFly v3.0/MDK-ARM/listing/
+ApexFly v3.0/MDK-ARM/output/
+
 # 通用编译产物
 *.o
 *.d
