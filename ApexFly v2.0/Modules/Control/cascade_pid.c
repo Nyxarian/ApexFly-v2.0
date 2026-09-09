@@ -54,6 +54,19 @@ void CascadePid_Reset(CascadePid_t *controller)
 }
 
 /**
+ * @brief 把交付比例转发给内环 PID，供 anti-windup 收缩内环积分限幅。
+ */
+void CascadePid_SetInnerDeliveryScale(CascadePid_t *controller, float scale)
+{
+    if (controller == NULL)
+    {
+        return;
+    }
+
+    Pid_SetDeliveryScale(&controller->inner, scale);
+}
+
+/**
  * @brief 计算外环，并把结果存成内环下一拍要用的目标。
  */
 float CascadePid_UpdateOuter(CascadePid_t *controller, float outer_setpoint, float outer_measurement, float dt_s)

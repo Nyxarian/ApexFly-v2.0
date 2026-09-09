@@ -60,6 +60,16 @@ void CascadePid_ApplyParams(CascadePid_t *controller, float outer_kp, float oute
 void CascadePid_Reset(CascadePid_t *controller);
 
 /**
+ * @brief 设置内环的交付比例，供内环 anti-windup 收缩积分限幅。
+ *
+ * 内环输出就是混控修正，会被 Mixer_Calculate() 统一缩放，所以只有内环需要
+ * 这个反馈；外环输出是目标角速度，不经过混控缩放，保持默认 1.0。
+ * @param controller 这一轴的串级对象。
+ * @param scale 交付比例，会被限制到 0～1，通常取上一拍混控的 correction_scale。
+ */
+void CascadePid_SetInnerDeliveryScale(CascadePid_t *controller, float scale);
+
+/**
  * @brief 更新外环，并把输出存成内环目标。
  * @param outer_setpoint 外环目标，例如目标横滚角，单位度。
  * @param outer_measurement 外环测量，例如当前横滚角，单位度。

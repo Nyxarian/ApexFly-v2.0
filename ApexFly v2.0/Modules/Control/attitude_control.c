@@ -12,6 +12,12 @@
  * 偏航外环吃磁航向最短角误差；杆出死区时外环让路，内环跟杆。
  * 内环 Kp/Ki/Kd 全为 0 时，外环输出直接当作混控修正，方便先调角度环。
  *
+ * anti-windup（#27）：内环积分限幅按上一拍混控的 correction_scale 收缩，输出饱和时
+ * 停止积分；外环输出是目标角速度，不经过混控缩放，交付比例恒为 1.0。
+ *
+ * 目标信号斜率限制（#29）：横滚/俯仰目标角、偏航目标角速度都先过 AttitudeControl_SlewLimit()，
+ * 杆量、Trim、链路跳变不会让目标值一步到位，打杆冲击有界可预测。
+ *
  * 实机已确认的混控入口符号：
  * roll_correction  = -Kp * roll_deg
  * pitch_correction = +Kp * pitch_deg
@@ -32,6 +38,18 @@
 #define ATTITUDE_YAW_TILT_FREEZE_DEG 25.0f
 #define ATTITUDE_STICK_ABS_MAX 1000.0f
 #define ATTITUDE_STICK_MAX_ANGLE_DEG 10.0f
+
+/* 目标信号斜率限制（#29）。
+   杆量、Trim、链路跳变都会让目标值一步到位，外环误差跟着跳，
+   内环 P 项就会瞬间变大（快速打杆时可达限幅的一半以上）。
+   下面三个上限把"目标值每拍能变多少"封住，让打杆冲击有界、可预测。 */
+/* 横滚/俯仰目标角最大变化率：满杆 10°，200°/s → 全行程最快 50ms 走完。 */
+#define ATTITUDE_TARGET_SLEW_DPS 200.0f
+/* 偏航满杆对应的目标角速度。与偏航外环输出限幅解耦：外环限幅是"航向保持环
+   能要求多快"，这里是"杆能要求多快"，语义不同，不共用一个参数。 */
+#define ATTITUDE_YAW_STICK_MAX_RATE_DPS 200.0f
+/* 偏航目标角速度最大变化率：0→满速 250ms 走完，避免打杆瞬间把偏航内环打满。 */
+#define ATTITUDE_YAW_RATE_SLEW_DPS 800.0f
 
 /* 积分限幅 = 输出限幅 × 本比例（#26 限幅语义拆解）。
    外环输出是目标角速度（度每秒），内环输出是混控修正（微秒）。
@@ -63,6 +81,13 @@ static float last_yaw_correction_us;
 static float yaw_hold_heading_deg;
 static bool yaw_hold_valid;
 static bool yaw_stick_was_deflected;
+/* 上一拍混控的统一缩放系数，作为三个内环积分限幅的收缩系数（#27 anti-windup）。
+   混控把三轴修正统一缩放后，内环实际交付量小于请求量，积分限幅要跟着收缩。 */
+static float last_correction_scale = 1.0f;
+/* 斜率限制后的目标值（#29），每拍朝原始目标移动，单次最多动限幅量。 */
+static float roll_setpoint_limited_deg;
+static float pitch_setpoint_limited_deg;
+static float yaw_rate_setpoint_limited_dps;
 
 /**
  * @brief 用外环、内环各一组参数初始化一轴串级。
@@ -110,6 +135,21 @@ static float AttitudeControl_Wrap360(float heading_deg)
     return heading_deg;
 }
 
+/**
+ * @brief 斜率限制（#29）：把 current 朝 target 移动，单次最多移动 max_delta。
+ *
+ * 和"一阶滤波"不同，这里的速率上界是硬约束，可以直接验证。
+ */
+static float AttitudeControl_SlewLimit(float current, float target, float max_delta)
+{
+    float delta;
+
+    delta = target - current;
+    if (delta > max_delta) delta = max_delta;
+    if (delta < -max_delta) delta = -max_delta;
+    return current + delta;
+}
+
 static float AttitudeControl_StickToAngleDeg(int16_t stick)
 {
     int16_t stick_used;
@@ -144,9 +184,7 @@ static float AttitudeControl_UpdateYaw(float mag_heading_deg, bool mag_heading_v
     bool stick_deflected;
     bool heading_ok;
     float heading_error_deg;
-    float stick_rate_dps;
-    float rate_limit_dps;
-    float inner_out;
+    float target_rate_dps;
 
     stick_deflected = (yaw_stick > ATTITUDE_YAW_STICK_DEADZONE) || (yaw_stick < -ATTITUDE_YAW_STICK_DEADZONE);
     heading_ok = mag_heading_valid && (AttitudeControl_Absf(roll_deg) < ATTITUDE_YAW_TILT_FREEZE_DEG) && (AttitudeControl_Absf(pitch_deg) < ATTITUDE_YAW_TILT_FREEZE_DEG);
@@ -157,16 +195,9 @@ static float AttitudeControl_UpdateYaw(float mag_heading_deg, bool mag_heading_v
         Pid_Reset(&yaw_cascade.outer);
         yaw_hold_valid = false;
         yaw_stick_was_deflected = true;
-        rate_limit_dps = yaw_cascade.outer.out_max;
-        if (rate_limit_dps < 1.0f) rate_limit_dps = 1.0f;
-        stick_rate_dps = ((float)yaw_stick / ATTITUDE_STICK_ABS_MAX) * rate_limit_dps;
-        yaw_cascade.inner_setpoint = stick_rate_dps;
-        if (AttitudeControl_InnerEnabled(&yaw_cascade)) inner_out = CascadePid_UpdateInner(&yaw_cascade, yaw_rate_dps, dt_s);
-        else inner_out = stick_rate_dps;
-        return inner_out;
+        target_rate_dps = ((float)yaw_stick / ATTITUDE_STICK_ABS_MAX) * ATTITUDE_YAW_STICK_MAX_RATE_DPS;
     }
-
-    if (heading_ok)
+    else if (heading_ok)
     {
         mag_heading_deg = AttitudeControl_Wrap360(mag_heading_deg);
         if (!yaw_hold_valid || yaw_stick_was_deflected) yaw_hold_heading_deg = mag_heading_deg;
@@ -174,15 +205,25 @@ static float AttitudeControl_UpdateYaw(float mag_heading_deg, bool mag_heading_v
         yaw_stick_was_deflected = false;
         /* PID 误差 = 0 - 测量。测量放「当前相对目标的偏差」，机头顺时针偏过则测量为正。 */
         heading_error_deg = AttitudeControl_Wrap180(mag_heading_deg - yaw_hold_heading_deg);
-        return AttitudeControl_UpdateAxis(&yaw_cascade, 0.0f, heading_error_deg, yaw_rate_dps, dt_s, 1.0f);
+        target_rate_dps = CascadePid_UpdateOuter(&yaw_cascade, 0.0f, heading_error_deg, dt_s);
+    }
+    else
+    {
+        /* 磁航向不可用或倾角太大：冻外环，内环只阻尼角速度。 */
+        Pid_Reset(&yaw_cascade.outer);
+        target_rate_dps = 0.0f;
     }
 
-    /* 磁航向不可用或倾角太大：冻外环，内环只阻尼角速度。 */
-    Pid_Reset(&yaw_cascade.outer);
-    yaw_cascade.inner_setpoint = 0.0f;
-    if (AttitudeControl_InnerEnabled(&yaw_cascade)) inner_out = CascadePid_UpdateInner(&yaw_cascade, yaw_rate_dps, dt_s);
-    else inner_out = 0.0f;
-    return inner_out;
+    /* 三个来源（打杆 / 航向外环 / 冻结归零）的目标角速度统一做斜率限制（#29），
+       避免打杆或回中瞬间速率目标一步到位，把偏航内环 P 项直接打满。 */
+    yaw_rate_setpoint_limited_dps = AttitudeControl_SlewLimit(yaw_rate_setpoint_limited_dps, target_rate_dps, ATTITUDE_YAW_RATE_SLEW_DPS * dt_s);
+    yaw_cascade.inner_setpoint = yaw_rate_setpoint_limited_dps;
+
+    if (AttitudeControl_InnerEnabled(&yaw_cascade))
+    {
+        return CascadePid_UpdateInner(&yaw_cascade, yaw_rate_dps, dt_s);
+    }
+    return yaw_rate_setpoint_limited_dps;
 }
 
 /**
@@ -217,6 +258,12 @@ void AttitudeControl_Reset(void)
     yaw_hold_heading_deg = 0.0f;
     yaw_hold_valid = false;
     yaw_stick_was_deflected = false;
+    /* 交付比例一并复位，避免解锁瞬间沿用上锁前的旧缩放系数。 */
+    last_correction_scale = 1.0f;
+    /* 斜率限制后的目标值一并复位（#29），解锁后从 0 平滑爬到当前杆位。 */
+    roll_setpoint_limited_deg = 0.0f;
+    pitch_setpoint_limited_deg = 0.0f;
+    yaw_rate_setpoint_limited_dps = 0.0f;
 }
 
 /**
@@ -225,26 +272,43 @@ void AttitudeControl_Reset(void)
 bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, float mag_heading_deg, bool mag_heading_valid, int16_t yaw_stick, int16_t roll_stick, int16_t pitch_stick, float roll_trim_deg, float pitch_trim_deg, float dt_s, MixerOutput_t *output)
 {
     MixerInput_t mixer_input;
-    float roll_setpoint_deg;
-    float pitch_setpoint_deg;
+    float roll_setpoint_raw_deg;
+    float pitch_setpoint_raw_deg;
 
     if ((body == NULL) || (output == NULL))
     {
         return false;
     }
 
-    /* 杆量映射成目标角后再加 Trim；Trim 只偏置中位，不把满杆角再放大。 */
-    roll_setpoint_deg = AttitudeControl_StickToAngleDeg(roll_stick) + roll_trim_deg;
-    pitch_setpoint_deg = AttitudeControl_StickToAngleDeg(pitch_stick) + pitch_trim_deg;
+    /* anti-windup（#27）：把上一拍混控的交付比例喂给三个内环，
+       内环积分限幅会按它收缩；外环输出是目标角速度，不经过混控缩放，保持 1.0。 */
+    CascadePid_SetInnerDeliveryScale(&roll_cascade, last_correction_scale);
+    CascadePid_SetInnerDeliveryScale(&pitch_cascade, last_correction_scale);
+    CascadePid_SetInnerDeliveryScale(&yaw_cascade, last_correction_scale);
+
+    /* 杆量映射成目标角后再加 Trim；Trim 只偏置中位，不把满杆角再放大。
+       映射结果先过斜率限制（#29），杆量/Trim 跳变不会让目标角一步到位。 */
+    roll_setpoint_raw_deg = AttitudeControl_StickToAngleDeg(roll_stick) + roll_trim_deg;
+    pitch_setpoint_raw_deg = AttitudeControl_StickToAngleDeg(pitch_stick) + pitch_trim_deg;
+    roll_setpoint_limited_deg = AttitudeControl_SlewLimit(roll_setpoint_limited_deg, roll_setpoint_raw_deg, ATTITUDE_TARGET_SLEW_DPS * dt_s);
+    pitch_setpoint_limited_deg = AttitudeControl_SlewLimit(pitch_setpoint_limited_deg, pitch_setpoint_raw_deg, ATTITUDE_TARGET_SLEW_DPS * dt_s);
     mixer_input.throttle_us = throttle_us;
-    mixer_input.roll_correction_us = AttitudeControl_UpdateAxis(&roll_cascade, roll_setpoint_deg, body->roll_deg, body->roll_rate_dps, dt_s, 1.0f);
-    mixer_input.pitch_correction_us = AttitudeControl_UpdateAxis(&pitch_cascade, pitch_setpoint_deg, body->pitch_deg, body->pitch_rate_dps, dt_s, -1.0f);
+    mixer_input.roll_correction_us = AttitudeControl_UpdateAxis(&roll_cascade, roll_setpoint_limited_deg, body->roll_deg, body->roll_rate_dps, dt_s, 1.0f);
+    mixer_input.pitch_correction_us = AttitudeControl_UpdateAxis(&pitch_cascade, pitch_setpoint_limited_deg, body->pitch_deg, body->pitch_rate_dps, dt_s, -1.0f);
     mixer_input.yaw_correction_us = AttitudeControl_UpdateYaw(mag_heading_deg, mag_heading_valid, yaw_stick, body->yaw_rate_dps, body->roll_deg, body->pitch_deg, dt_s);
     last_roll_correction_us = mixer_input.roll_correction_us;
     last_pitch_correction_us = mixer_input.pitch_correction_us;
     last_yaw_correction_us = mixer_input.yaw_correction_us;
 
-    return Mixer_Calculate(&mixer_input, MIXER_PWM_EFFECTIVE_MIN_US, MOTOR_PWM_MAX_US, output);
+    if (!Mixer_Calculate(&mixer_input, MIXER_PWM_EFFECTIVE_MIN_US, MOTOR_PWM_MAX_US, output))
+    {
+        return false;
+    }
+
+    /* 记录本拍实际交付比例，供下一拍三个内环的 anti-windup 收缩积分限幅。 */
+    last_correction_scale = output->correction_scale;
+
+    return true;
 }
 
 void AttitudeControl_GetLastCorrections(float *roll_us, float *pitch_us, float *yaw_us)
