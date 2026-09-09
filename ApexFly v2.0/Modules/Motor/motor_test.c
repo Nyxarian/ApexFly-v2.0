@@ -334,6 +334,12 @@ void MotorTest_Task(void *argument)
             ControlLink_GetSnapshot(&link);
             armed = link.connected && link.command_valid && ((link.command.flags & APEX_CONTROL_FLAG_ARM_REQUESTED) != 0U);
 
+            /* 内环（角速度环）未启用时拒绝解锁：此时姿态环没有阻尼，起飞必然发散。 */
+            if (armed && !AttitudeControl_IsInnerLoopEnabled())
+            {
+                armed = false;
+            }
+
             if (!armed)
             {
                 throttle_us = MOTOR_PWM_MIN_US;
@@ -408,7 +414,7 @@ void MotorTest_Task(void *argument)
             }
             was_armed = armed;
 
-            Radio_PublishFlightState(body.roll_deg, body.pitch_deg, body.yaw_deg, throttle_us, altitude_cm, vz_cms, true, true, armed);
+            Radio_PublishFlightState(body.roll_deg, body.pitch_deg, body.yaw_deg, throttle_us, altitude_cm, vz_cms, true, AttitudeControl_IsInnerLoopEnabled(), armed);
         }
     }
 }

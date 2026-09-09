@@ -42,6 +42,18 @@ typedef struct
     float integral_z;
     /* 最近一拍加速度模长，单位 g。 */
     float accel_norm_g;
+    /* 加计三轴软件低通状态，单位 g。 */
+    float accel_x_lpf;
+    float accel_y_lpf;
+    float accel_z_lpf;
+    /* true 表示低通已用首拍数据初始化。 */
+    bool accel_lpf_ready;
+    /* 上一拍修正后的角速度（含 Mahony 修正），单位弧度每秒，用于中值积分。 */
+    float last_gyro_x_rad;
+    float last_gyro_y_rad;
+    float last_gyro_z_rad;
+    /* true 表示已有一拍历史，可以开始中值积分。 */
+    bool gyro_history_valid;
     /* 最近一拍重力方向误差，单位无量纲。 */
     float fusion_error_x;
     /* 最近一拍重力方向误差，单位无量纲。 */

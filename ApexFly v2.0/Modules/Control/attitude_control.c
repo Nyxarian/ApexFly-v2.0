@@ -237,3 +237,11 @@ void AttitudeControl_GetLastCorrections(float *roll_us, float *pitch_us, float *
     if (pitch_us != NULL) *pitch_us = last_pitch_correction_us;
     if (yaw_us != NULL) *yaw_us = last_yaw_correction_us;
 }
+
+/**
+ * @brief 横滚、俯仰内环是否都已启用，用于解锁前门禁。
+ */
+bool AttitudeControl_IsInnerLoopEnabled(void)
+{
+    return AttitudeControl_InnerEnabled(&roll_cascade) && AttitudeControl_InnerEnabled(&pitch_cascade);
+}

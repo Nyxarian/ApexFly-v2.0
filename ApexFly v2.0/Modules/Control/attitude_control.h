@@ -124,6 +124,14 @@ bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, f
  */
 void AttitudeControl_GetLastCorrections(float *roll_us, float *pitch_us, float *yaw_us);
 
+/**
+ * @brief 横滚、俯仰的角速度内环是否都已启用（任一增益非 0 即算启用）。
+ *
+ * 内环全 0 时外环输出会直通当混控修正量，系统有刚度无阻尼，起飞必然发散。
+ * 解锁前用它做门禁，避免参数丢失时静默带病飞行。偏航内环不参与判定。
+ */
+bool AttitudeControl_IsInnerLoopEnabled(void);
+
 #ifdef __cplusplus
 }
 #endif
