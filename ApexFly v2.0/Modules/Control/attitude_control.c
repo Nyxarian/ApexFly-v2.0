@@ -228,7 +228,7 @@ bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, f
     last_pitch_correction_us = mixer_input.pitch_correction_us;
     last_yaw_correction_us = mixer_input.yaw_correction_us;
 
-    return Mixer_Calculate(&mixer_input, MOTOR_PWM_MIN_US, MOTOR_PWM_MAX_US, output);
+    return Mixer_Calculate(&mixer_input, MIXER_PWM_EFFECTIVE_MIN_US, MOTOR_PWM_MAX_US, output);
 }
 
 void AttitudeControl_GetLastCorrections(float *roll_us, float *pitch_us, float *yaw_us)

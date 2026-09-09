@@ -46,7 +46,8 @@
 #define MOTOR_BATTERY_UPDATE_MS 1000U
 #define MOTOR_DT_MIN_S 0.005f
 #define MOTOR_DT_MAX_S 0.03f
-#define MOTOR_ATTITUDE_ENABLE_PWM_US 1050U
+/* 姿态环启用门槛与混控有效下限统一，避免两处不一致。 */
+#define MOTOR_ATTITUDE_ENABLE_PWM_US MIXER_PWM_EFFECTIVE_MIN_US
 /* I2C 连续失败多少次才判定总线真故障并上锁重初始化（20 拍 = 200ms）。 */
 #define MOTOR_I2C_FAIL_LIMIT 20U
 
@@ -64,11 +65,8 @@ static void MotorTest_TimebaseInit(void)
  */
 static void MotorTest_ApplyMixer(MixerOutput_t *output)
 {
-    /* 高度控制已启动后每路至少保持 1050us，避免姿态修正把单个电机压回停转区。 */
-    if (output->motor_1_us < MOTOR_ATTITUDE_ENABLE_PWM_US) output->motor_1_us = MOTOR_ATTITUDE_ENABLE_PWM_US;
-    if (output->motor_2_us < MOTOR_ATTITUDE_ENABLE_PWM_US) output->motor_2_us = MOTOR_ATTITUDE_ENABLE_PWM_US;
-    if (output->motor_3_us < MOTOR_ATTITUDE_ENABLE_PWM_US) output->motor_3_us = MOTOR_ATTITUDE_ENABLE_PWM_US;
-    if (output->motor_4_us < MOTOR_ATTITUDE_ENABLE_PWM_US) output->motor_4_us = MOTOR_ATTITUDE_ENABLE_PWM_US;
+    /* 有效下限由 Mixer_Calculate 统一处理（MIXER_PWM_EFFECTIVE_MIN_US），
+       这里不再逐路裁剪，避免破坏四路差速关系。 */
     Motor_SetPulseUs(MOTOR_M1, output->motor_1_us);
     Motor_SetPulseUs(MOTOR_M2, output->motor_2_us);
     Motor_SetPulseUs(MOTOR_M3, output->motor_3_us);
