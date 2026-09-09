@@ -3,6 +3,8 @@
  * @brief RAM 参数表实现：30 个协议 ID 与姿态串级、满杆油门上限互转。
  *
  * 增益和限幅改完后只刷新 Pid_t 的数字并 Reset 积分，不重新 Init 整轴以外的状态机。
+ * 限幅语义（#26）：遥控只能设 out_max（MAX_RATE_DPS / MAX_CORRECTION_US）；
+ * 积分限幅由 attitude_control.c 按 out_max 的固定比例推导，本文件不再写 i_limit。
  * trim 先存着给 GET/SET 显示，不送进控制目标角。
  * APEX_PID_HOVER_PWM_US 表示满杆油门上限；垂速 PID 项仍可读写，但不再参与电机输出。
  * MAG_CAL_STOP 成功后由黑匣子把硬铁偏移写入 0x002000；失败不覆盖旧值。
@@ -174,32 +176,26 @@ static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
     case APEX_PID_ROLL_MAX_RATE_DPS:
         pid->roll_angle.out_max = value;
         pid->roll_angle.out_min = -value;
-        pid->roll_angle.i_limit = value;
         break;
     case APEX_PID_ROLL_MAX_CORRECTION_US:
         pid->roll_rate.out_max = value;
         pid->roll_rate.out_min = -value;
-        pid->roll_rate.i_limit = value;
         break;
     case APEX_PID_PITCH_MAX_RATE_DPS:
         pid->pitch_angle.out_max = value;
         pid->pitch_angle.out_min = -value;
-        pid->pitch_angle.i_limit = value;
         break;
     case APEX_PID_PITCH_MAX_CORRECTION_US:
         pid->pitch_rate.out_max = value;
         pid->pitch_rate.out_min = -value;
-        pid->pitch_rate.i_limit = value;
         break;
     case APEX_PID_YAW_MAX_RATE_DPS:
         pid->yaw_angle.out_max = value;
         pid->yaw_angle.out_min = -value;
-        pid->yaw_angle.i_limit = value;
         break;
     case APEX_PID_YAW_MAX_CORRECTION_US:
         pid->yaw_rate.out_max = value;
         pid->yaw_rate.out_min = -value;
-        pid->yaw_rate.i_limit = value;
         break;
     case APEX_PID_ROLL_TRIM_DEG: pid_table.roll_trim_deg = value; break;
     case APEX_PID_PITCH_TRIM_DEG: pid_table.pitch_trim_deg = value; break;

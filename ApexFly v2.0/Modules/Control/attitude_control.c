@@ -33,17 +33,25 @@
 #define ATTITUDE_STICK_ABS_MAX 1000.0f
 #define ATTITUDE_STICK_MAX_ANGLE_DEG 10.0f
 
+/* 积分限幅 = 输出限幅 × 本比例（#26 限幅语义拆解）。
+   外环输出是目标角速度（度每秒），内环输出是混控修正（微秒）。
+   取 15% / 25%：积分项最多只占输出的一小部分，Ki 打开后也不会独占整个输出造成 windup。
+   遥控只能改输出限幅（MAX_RATE_DPS / MAX_CORRECTION_US），积分限幅按本比例自动跟随，
+   不再出现"改一个动两个、且两者永远相等"的耦合。 */
+#define ATTITUDE_OUTER_I_LIMIT_RATIO 0.15f
+#define ATTITUDE_INNER_I_LIMIT_RATIO 0.25f
+
 /*
  * 调参改这里。6 组对象独立，不要改回共用一个 Pid_t。
- * 当前全部 Kp/Ki/Kd 为 0，积分限幅和输出限幅为 200。
+ * 当前全部 Kp/Ki/Kd 为 0，输出限幅为 200；积分限幅不在这里，按上面的比例推导。
  */
 static const AttitudePidParams_t kDefaultPidParams = {
-    .roll_angle = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .i_limit = 200.0f, .out_max = 200.0f, .out_min = -200.0f},
-    .roll_rate = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .i_limit = 200.0f, .out_max = 200.0f, .out_min = -200.0f},
-    .pitch_angle = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .i_limit = 200.0f, .out_max = 200.0f, .out_min = -200.0f},
-    .pitch_rate = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .i_limit = 200.0f, .out_max = 200.0f, .out_min = -200.0f},
-    .yaw_angle = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .i_limit = 200.0f, .out_max = 200.0f, .out_min = -200.0f},
-    .yaw_rate = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .i_limit = 200.0f, .out_max = 200.0f, .out_min = -200.0f},
+    .roll_angle = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .out_max = 200.0f, .out_min = -200.0f},
+    .roll_rate = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .out_max = 200.0f, .out_min = -200.0f},
+    .pitch_angle = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .out_max = 200.0f, .out_min = -200.0f},
+    .pitch_rate = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .out_max = 200.0f, .out_min = -200.0f},
+    .yaw_angle = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .out_max = 200.0f, .out_min = -200.0f},
+    .yaw_rate = {.kp = 0.0f, .ki = 0.0f, .kd = 0.0f, .out_max = 200.0f, .out_min = -200.0f},
 };
 
 static CascadePid_t roll_cascade;
@@ -58,10 +66,18 @@ static bool yaw_stick_was_deflected;
 
 /**
  * @brief 用外环、内环各一组参数初始化一轴串级。
+ *
+ * 积分限幅不取参数表里的值，而是按输出限幅的固定比例推导（#26）：
+ * 这样遥控改 MAX_RATE_DPS / MAX_CORRECTION_US 时，积分限幅按比例跟随，
+ * 既不会跟输出限幅相等（windup），也不会出现积分限幅大于输出限幅的非法组合。
  */
 static void AttitudeControl_InitAxis(CascadePid_t *axis, const PidParam_t *outer, const PidParam_t *inner)
 {
-    CascadePid_Init(axis, outer->kp, outer->ki, outer->kd, outer->i_limit, outer->out_max, outer->out_min, inner->kp, inner->ki, inner->kd, inner->i_limit, inner->out_max, inner->out_min);
+    CascadePid_Init(axis,
+                    outer->kp, outer->ki, outer->kd,
+                    outer->out_max * ATTITUDE_OUTER_I_LIMIT_RATIO, outer->out_max, outer->out_min,
+                    inner->kp, inner->ki, inner->kd,
+                    inner->out_max * ATTITUDE_INNER_I_LIMIT_RATIO, inner->out_max, inner->out_min);
 }
 
 /**

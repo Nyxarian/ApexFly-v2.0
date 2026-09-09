@@ -40,6 +40,10 @@ extern "C" {
 
 /**
  * @brief 一组会调的 PID 数字，不含积分等运行时状态。
+ *
+ * 注意：这里**没有** i_limit（积分限幅）。
+ * 积分限幅由 attitude_control.c 按 out_max 的固定比例推导（#26 语义拆解），
+ * 不再跟输出限幅绑成同一个值，避免"改输出限幅连带改积分限幅"。
  */
 typedef struct
 {
@@ -49,11 +53,9 @@ typedef struct
     float ki;
     /* 微分增益。 */
     float kd;
-    /* 积分项限幅。 */
-    float i_limit;
-    /* 输出上限。 */
+    /* 输出上限。外环是目标角速度，单位度每秒；内环是混控修正，单位微秒。 */
     float out_max;
-    /* 输出下限。 */
+    /* 输出下限，通常与上限对称。 */
     float out_min;
 } PidParam_t;
 
@@ -61,7 +63,7 @@ typedef struct
  * @brief 飞控姿态环 6 组 PID 参数。
  *
  * 外环输出是目标角速度，单位度每秒；内环输出是混控修正，单位微秒。
- * 当前限幅都先填 200，打开内环后外环限幅应按最大角速度再改。
+ * 当前 out_max 都先填 200；积分限幅由 attitude_control.c 按 out_max 的比例推导。
  */
 typedef struct
 {
