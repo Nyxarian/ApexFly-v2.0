@@ -38,8 +38,10 @@ typedef enum
 
 /* 电调最小油门，停转和锁定都用这个脉宽。 */
 #define MOTOR_PWM_MIN_US  1000U
-/* 可选怠速脉宽，点转测试时不要直接拉到最大。 */
-#define MOTOR_PWM_IDLE_US 1050U
+/* 可选怠速脉宽，点转测试时不要直接拉到最大。
+   必须不低于混控有效下限（MIXER_PWM_EFFECTIVE_MIN_US，当前 1100us）：
+   驱动层不能反向包含混控层头文件，所以这里手工同步。 */
+#define MOTOR_PWM_IDLE_US 1100U
 /* 电调最大油门，驱动层会把超出的值裁到这里。 */
 #define MOTOR_PWM_MAX_US  2000U
 
