@@ -26,7 +26,6 @@
 #include "blackbox.h"
 #include "cmsis_os.h"
 #include "control_link.h"
-#include "debug.h"
 #include "i2c.h"
 #include "imu_attitude.h"
 #include "imu_bias.h"
@@ -60,79 +59,6 @@ static void MotorTest_TimebaseInit(void)
     DWT->CYCCNT = 0U;
     DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
 }
-
-/* ===== 临时探针：I2C 读耗时 / 整拍耗时 / WHO_AM_I 自检 =====
-   用途：对比 I2C1 总线速率改造前后的实际耗时，并每秒做一次固定值自检。
-   验证结束后：本段、控制循环里的三处调用点、以及本文件顶部的 #include "debug.h"
-   一起整段删除即可，不影响其它逻辑。 */
-#define MOTOR_PROBE_PRINT_MS 1000U
-
-/* 本拍起点与本拍耗时，单位微秒：170MHz 下 CYCCNT 每 170 个计数为 1us。 */
-static uint32_t probe_cycle_start;
-static uint32_t probe_i2c_us;
-static uint32_t probe_work_us;
-/* 1 秒窗口内的累加值、峰值与有效样本数。 */
-static uint32_t probe_i2c_sum_us;
-static uint32_t probe_i2c_max_us;
-static uint32_t probe_work_sum_us;
-static uint32_t probe_work_max_us;
-static uint32_t probe_sample_count;
-/* WHO_AM_I 自检：MPU6050 该寄存器固定返回 0x68，读错位或时序不对会立刻不符。 */
-static uint32_t probe_who_value;
-static uint32_t probe_who_bad;
-static uint32_t probe_next_tick;
-
-/**
- * @brief 累计本拍探针数据，只在跑完整拍时调用。
- * @param i2c_us MPU6050_ReadData() 的耗时，单位微秒。
- * @param work_us 从读 IMU 到遥测发布结束的耗时，单位微秒。
- */
-static void MotorTest_ProbeAccumulate(uint32_t i2c_us, uint32_t work_us)
-{
-    probe_i2c_sum_us += i2c_us;
-    probe_work_sum_us += work_us;
-    if (i2c_us > probe_i2c_max_us) probe_i2c_max_us = i2c_us;
-    if (work_us > probe_work_max_us) probe_work_max_us = work_us;
-    probe_sample_count++;
-}
-
-/**
- * @brief 每拍开头调用：到点就做一次总线自检并打印 [T] 行。
- *
- * 打印放在每拍开头而不是末尾，这样即使总线出错、每拍都 continue，
- * [T] 行仍会按时打出来，不会出现"完全没输出、看不出哪里坏了"。
- * @param device IMU 设备对象，只读它的 i2c_error_count 并做自检。
- */
-static void MotorTest_ProbeReport(MPU6050_Device_t *device)
-{
-    uint8_t who_am_i = 0U;
-
-    /* 打印那一拍会被拉长约 5ms，属于台架观察的正常代价；被测量的数都在打印之前记好。 */
-    if ((int32_t)(osKernelGetTickCount() - probe_next_tick) < 0) return;
-    probe_next_tick = osKernelGetTickCount() + MOTOR_PROBE_PRINT_MS;
-
-    /* 自检走的正是本次改造后的总线速率；读失败记为 0xFF，读到的值不对也记一次异常。 */
-    if (MPU6050_ReadWhoAmI(device, &who_am_i) == MPU6050_STATUS_OK)
-    {
-        probe_who_value = who_am_i;
-        if (who_am_i != 0x68U) probe_who_bad++;
-    }
-    else
-    {
-        probe_who_value = 0xFFU;
-        probe_who_bad++;
-    }
-
-    Debug_Printf("[T] i2c=%lu/%luus work=%lu/%luus n=%lu err=%lu who=0x%02X bad=%lu\r\n", (unsigned long)((probe_sample_count != 0U) ? (probe_i2c_sum_us / probe_sample_count) : 0U), (unsigned long)probe_i2c_max_us, (unsigned long)((probe_sample_count != 0U) ? (probe_work_sum_us / probe_sample_count) : 0U), (unsigned long)probe_work_max_us, (unsigned long)probe_sample_count, (unsigned long)device->i2c_error_count, (unsigned int)probe_who_value, (unsigned long)probe_who_bad);
-
-    /* 打印完成后再清窗口，保证本秒的数字都在这一行里。 */
-    probe_i2c_sum_us = 0U;
-    probe_i2c_max_us = 0U;
-    probe_work_sum_us = 0U;
-    probe_work_max_us = 0U;
-    probe_sample_count = 0U;
-}
-/* ===== 临时探针结束 ===== */
 
 /**
  * @brief 把混控算出的四路脉宽写到对应电机。
@@ -320,13 +246,7 @@ void MotorTest_Task(void *argument)
             (void)osDelayUntil(next_tick);
             next_tick += IMU_SAMPLE_PERIOD_MS;
 
-            /* 临时探针：每秒一次总线自检与 [T] 打印；计时从它之后开始，自检开销不计入本拍。 */
-            MotorTest_ProbeReport(&imu_device);
-            probe_cycle_start = DWT->CYCCNT;
-
             status = MPU6050_ReadData(&imu_device, &imu_data);
-            /* 临时探针：本拍 I2C 读耗时，单位微秒。 */
-            probe_i2c_us = (uint32_t)(DWT->CYCCNT - probe_cycle_start) / (SystemCoreClock / 1000000U);
             if (status != MPU6050_STATUS_OK)
             {
                 /* 单次 I2C 错误只丢本拍：电机保持上一拍输出，下一拍自动重试。
@@ -493,10 +413,6 @@ void MotorTest_Task(void *argument)
             was_armed = armed;
 
             Radio_PublishFlightState(body.roll_deg, body.pitch_deg, body.yaw_deg, throttle_us, altitude_cm, vz_cms, true, AttitudeControl_IsInnerLoopEnabled(), armed);
-
-            /* 临时探针：本拍总耗时（读 IMU 到遥测发布结束），单位微秒。 */
-            probe_work_us = (uint32_t)(DWT->CYCCNT - probe_cycle_start) / (SystemCoreClock / 1000000U);
-            MotorTest_ProbeAccumulate(probe_i2c_us, probe_work_us);
         }
     }
 }

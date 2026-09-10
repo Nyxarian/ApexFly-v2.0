@@ -419,7 +419,7 @@
 | USART2 | GPS 9600，DMA 空闲中断 | PA2/PA3 |
 | SPI1 | 5.3125MHz（170/32）、Mode0、软件 NSS | RA-01SC |
 | SPI3 | 10.625MHz（170/16）、软件 NSS（PB6） | W25Q64（GPIO 速度 LOW 待波形确认） |
-| I2C1 | MPU6050，7 位地址 0x68；Timing=0x40B285C2（400kHz FM） | 轮询阻塞读写（每次最多 20ms） |
+| I2C1 | MPU6050，7 位地址 0x68；Timing=`0x40621236`（400kHz FM，2026-09-10 由旧值 `0x40B285C2` 改来；旧值实测约 98.8kHz） | 轮询阻塞读写，单次 14 字节读实测 405µs |
 | I2C2 | 磁力计/气压共用 PA8/PA9 + 事务锁；Timing 同 I2C1（400kHz） | 设备地址见 7.1 |
 | ADC1 | IN1(PA0) 电池分压 11:1 ×1.03 修正 | 1Hz |
 | GPIO | 关键引脚全表见 main.h 与 gpio.c：LED PF9/PF10；LoRa NSS PA4/SCK PA5/MISO PA6/MOSI PA7（SPI1 AF）、DIO1 PB2(EXTI2 上升沿)、NRST PE7、TXEN PE8、RXEN PE9、BUSY PE10（速度 LOW）；IMU_INT PB0(EXTI0)；W25Q64 CS PB6；电调 PC6–PC9（TIM8 AF，速度待波形确认）；GPS USART2 PA2/PA3 | 详见 gpio.c |
