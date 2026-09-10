@@ -26,7 +26,6 @@
 #include "blackbox.h"
 #include "cmsis_os.h"
 #include "control_link.h"
-#include "debug.h"
 #include "FreeRTOS.h"
 #include "i2c.h"
 #include "imu_attitude.h"
@@ -76,9 +75,6 @@ static void MotorTest_TimebaseInit(void)
    用静态分配的二值信号量，不占 FreeRTOS 堆；中断里只发信号，不做任何 I2C。 */
 static StaticSemaphore_t imu_drdy_semaphore_storage;
 static SemaphoreHandle_t imu_drdy_semaphore;
-/* 临时统计：中断次数与超时兜底次数（验证后随 [R] 打印一起删除）。 */
-static volatile uint32_t imu_drdy_irq_count;
-static volatile uint32_t imu_drdy_timeout_count;
 
 /**
  * @brief IMU 数据就绪中断回调，由 EXTI0 的 HAL_GPIO_EXTI_Callback 调用。
@@ -92,7 +88,6 @@ void MotorTest_NotifyImuDrdyFromISR(void)
 
     if (imu_drdy_semaphore == NULL) return;
 
-    imu_drdy_irq_count++;
     xSemaphoreGiveFromISR(imu_drdy_semaphore, &higher_priority_task_woken);
     portYIELD_FROM_ISR(higher_priority_task_woken);
 }
@@ -102,7 +97,8 @@ void MotorTest_NotifyImuDrdyFromISR(void)
  *
  * 等不到就按超时返回，让控制环照常跑一拍：
  * INT 线断了或脉冲被吃掉时，飞机不会停在信号量上等死。
- * 台架实测：DRDY 完全不来时循环稳定跑在超时周期上，不卡死。
+ * 台架实测（250Hz/8ms 超时）：DRDY 完全不来时循环稳定跑在 125Hz 不卡死；
+ * 冷启动后第一次等待可能超时一次（芯片刚使能中断，第一个脉冲要几毫秒才来），之后不再发生。
  * @return true 表示由中断唤醒；false 表示超时或信号量不可用。
  */
 static bool MotorTest_WaitImuDrdy(void)
@@ -114,61 +110,8 @@ static bool MotorTest_WaitImuDrdy(void)
         return false;
     }
 
-    if (xSemaphoreTake(imu_drdy_semaphore, pdMS_TO_TICKS(MOTOR_DRDY_TIMEOUT_MS)) == pdTRUE) return true;
-
-    imu_drdy_timeout_count++;
-    return false;
+    return xSemaphoreTake(imu_drdy_semaphore, pdMS_TO_TICKS(MOTOR_DRDY_TIMEOUT_MS)) == pdTRUE;
 }
-
-/* ===== 临时验证打印（验证后整段删除）=====
-   每秒打印一行 [R]，字段顺序依次为：
-   drdy(每秒中断数) tick(每秒拍数) timeout(累计) dt均值/峰值(us) work均值/峰值(us)
-   gyro(三轴|角速度|之和的均值，单位 0.01dps) err(累计I2C错误)
-   这一行刻意写短（约 37 字符 ≈ 3.2ms @115200），好让它连同本拍工作一起塞进 4ms 的一拍内，
-   不至于因为打印本身吃掉采样、把 dt 统计弄脏。
-   gyro 是静止噪声指示：静止时它正比于噪声幅度，用来对比 DLPF 42Hz / 98Hz 两档。 */
-#define MOTOR_RATE_PRINT_MS 1000U
-
-static uint32_t rate_tick_count;
-static uint32_t rate_dt_sum_us;
-static uint32_t rate_dt_max_us;
-static uint32_t rate_work_sum_us;
-static uint32_t rate_work_max_us;
-static float rate_gyro_abs_sum;
-static uint32_t rate_next_print_tick;
-
-/**
- * @brief 累计一拍并每秒打印一次 [R]。
- * @param dt_us 本拍周期（两次唤醒之间），单位微秒。
- * @param work_us 本拍从唤醒到遥测发布结束的耗时，单位微秒。
- * @param gyro_abs_dps 本拍三轴角速度绝对值之和，单位度每秒。
- * @param device IMU 设备对象，只读它的 i2c_error_count。
- */
-static void MotorTest_RateReport(uint32_t dt_us, uint32_t work_us, float gyro_abs_dps, MPU6050_Device_t *device)
-{
-    rate_tick_count++;
-    rate_dt_sum_us += dt_us;
-    rate_work_sum_us += work_us;
-    rate_gyro_abs_sum += gyro_abs_dps;
-    if (dt_us > rate_dt_max_us) rate_dt_max_us = dt_us;
-    if (work_us > rate_work_max_us) rate_work_max_us = work_us;
-
-    if ((int32_t)(osKernelGetTickCount() - rate_next_print_tick) < 0) return;
-    rate_next_print_tick = osKernelGetTickCount() + MOTOR_RATE_PRINT_MS;
-
-    Debug_Printf("[R]%lu %lu %lu %lu %lu %lu %lu %lu %lu\r\n", (unsigned long)imu_drdy_irq_count, (unsigned long)rate_tick_count, (unsigned long)imu_drdy_timeout_count, (unsigned long)(rate_dt_sum_us / rate_tick_count), (unsigned long)rate_dt_max_us, (unsigned long)(rate_work_sum_us / rate_tick_count), (unsigned long)rate_work_max_us, (unsigned long)(rate_gyro_abs_sum * 100.0f / (float)rate_tick_count), (unsigned long)device->i2c_error_count);
-
-    /* 打印完成后再清窗口，保证这一行的数字都在同一个窗口里。
-       timeout 是累计值，刻意不清零，方便发现偶发的一次超时。 */
-    imu_drdy_irq_count = 0U;
-    rate_tick_count = 0U;
-    rate_dt_sum_us = 0U;
-    rate_dt_max_us = 0U;
-    rate_work_sum_us = 0U;
-    rate_work_max_us = 0U;
-    rate_gyro_abs_sum = 0.0f;
-}
-/* ===== 临时验证打印结束 ===== */
 
 /**
  * @brief 把混控算出的四路脉宽写到对应电机。
@@ -281,7 +224,6 @@ void MotorTest_Task(void *argument)
     uint32_t next_battery_tick;
     uint32_t imu_cycles;
     uint32_t dt_us;
-    uint32_t work_us;
     uint32_t blackbox_sample_divider;
     uint32_t i2c_fail_streak;
     float control_dt_s;
@@ -397,9 +339,9 @@ void MotorTest_Task(void *argument)
                 continue;
             }
 
-            /* 控制环内禁止长期保留阻塞打印：250Hz 下一拍只有 4ms，一行长日志就能吃掉采样。
-               本阶段临时挂了一行 1Hz、约 3ms 的 [R]（验证完必须删除）。
-               需要观察姿态数据时看黑匣子样本，或在本文件外临时挂调试代码。 */
+            /* 控制环内禁止任何阻塞打印：250Hz 下一拍只有 4ms，一行长日志就能吃掉采样、
+               并把 dt 统计弄脏。需要观察姿态数据时看黑匣子样本，
+               或在本文件外临时挂调试代码，验证完立即删除。 */
             IMU_GyroBias_Apply(&bias_collector.bias, &imu_data);
             if (!IMU_Attitude_Update(&attitude, &imu_data, control_dt_s))
             {
@@ -529,10 +471,6 @@ void MotorTest_Task(void *argument)
             was_armed = armed;
 
             Radio_PublishFlightState(body.roll_deg, body.pitch_deg, body.yaw_deg, throttle_us, altitude_cm, vz_cms, true, AttitudeControl_IsInnerLoopEnabled(), armed);
-
-            /* 临时验证打印：本拍总耗时（读 IMU 到遥测发布结束）+ 陀螺静止噪声指示。 */
-            work_us = (uint32_t)(DWT->CYCCNT - imu_cycles) / (SystemCoreClock / 1000000U);
-            MotorTest_RateReport(dt_us, work_us, MotorTest_Absf(body.roll_rate_dps) + MotorTest_Absf(body.pitch_rate_dps) + MotorTest_Absf(body.yaw_rate_dps), &imu_device);
         }
     }
 }
