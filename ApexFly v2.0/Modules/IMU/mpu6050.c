@@ -194,8 +194,11 @@ MPU6050_Status_t MPU6050_Init(MPU6050_Device_t *device, I2C_HandleTypeDef *i2c)
         return status;
     }
 
-    /* 设置 DLPF_CFG=3，陀螺仪带宽约 42Hz，加速度计带宽约 44Hz。 */
-    status = MPU6050_WriteRegister(device, MPU6050_REG_CONFIG, 0x03U);
+    /* 设置 DLPF_CFG=2，陀螺仪带宽约 98Hz，加速度计带宽约 98Hz。
+       比 0x03 档（42Hz）带宽更高、延迟从约 4.9ms 降到约 2.8ms；
+       250Hz 采样下奈奎斯特 125Hz > 98Hz，不会折叠。
+       再上一档 0x01（188Hz）噪声明显上升，暂不采用。 */
+    status = MPU6050_WriteRegister(device, MPU6050_REG_CONFIG, 0x02U);
     /* 检查数字低通滤波器配置。 */
     if (status != MPU6050_STATUS_OK)
     {
@@ -203,11 +206,11 @@ MPU6050_Status_t MPU6050_Init(MPU6050_Device_t *device, I2C_HandleTypeDef *i2c)
         return status;
     }
 
-    /* 采样分频 9：DLPF 开启时陀螺内部输出为 1kHz，分频后输出寄存器与 DRDY 都是 100Hz，
-       与控制环 100Hz 一拍一帧对齐，每拍必然是新样本。
-       必须与 DRDY 中断采样配套：若改成 100Hz 输出却仍靠定时读，会周期性跨帧，
-       accel 与 gyro 会差整帧（10ms），比 1kHz 输出时的抽点更糟。 */
-    status = MPU6050_WriteRegister(device, MPU6050_REG_SMPLRT_DIV, 0x09U);
+    /* 采样分频 3：DLPF 开启时陀螺内部输出为 1kHz，分频后输出寄存器与 DRDY 都是 250Hz，
+       与控制环 250Hz 一拍一帧对齐，每拍必然是新样本。
+       必须与 DRDY 中断采样配套：若把输出率降到控制率以下却仍靠定时读，会周期性跨帧，
+       accel 与 gyro 会差整帧，比高输出率时的抽点更糟。 */
+    status = MPU6050_WriteRegister(device, MPU6050_REG_SMPLRT_DIV, 0x03U);
     /* 检查采样率配置。 */
     if (status != MPU6050_STATUS_OK)
     {

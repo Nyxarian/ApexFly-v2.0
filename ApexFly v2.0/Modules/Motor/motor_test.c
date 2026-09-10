@@ -26,6 +26,7 @@
 #include "blackbox.h"
 #include "cmsis_os.h"
 #include "control_link.h"
+#include "debug.h"
 #include "FreeRTOS.h"
 #include "i2c.h"
 #include "imu_attitude.h"
@@ -44,17 +45,23 @@
 #define ESC_ARM_WAIT_MS 3000U
 #define IMU_BIAS_SAMPLE_COUNT 500U
 #define IMU_LEVEL_SAMPLE_COUNT 200U
-#define IMU_SAMPLE_PERIOD_MS 10U
-#define IMU_DELTA_TIME_S 0.01f
+/* 控制环 250Hz（4ms），一次 DRDY = 一帧控制。本值只用于 DRDY 兜底与回退路径。 */
+#define IMU_SAMPLE_PERIOD_MS 4U
+/* 上电初值，实测 dt 之后会被真实周期覆盖（传感器 250Hz 实际约 4008us）。 */
+#define IMU_DELTA_TIME_S 0.004f
 #define MOTOR_BATTERY_UPDATE_MS 1000U
-#define MOTOR_DT_MIN_S 0.005f
-#define MOTOR_DT_MAX_S 0.03f
+/* dt 合理性区间：正常 250Hz 约 4008us，DRDY 兜底约 8ms，两者都要落在区间内。 */
+#define MOTOR_DT_MIN_S 0.002f
+#define MOTOR_DT_MAX_S 0.012f
 /* 姿态环启用门槛与混控有效下限统一，避免两处不一致。 */
 #define MOTOR_ATTITUDE_ENABLE_PWM_US MIXER_PWM_EFFECTIVE_MIN_US
-/* I2C 连续失败多少次才判定总线真故障并上锁重初始化（20 拍 = 200ms）。 */
+/* I2C 连续失败多少次才判定总线真故障并上锁重初始化（20 拍 = 80ms，250Hz）。 */
 #define MOTOR_I2C_FAIL_LIMIT 20U
 /* 等 DRDY 脉冲的超时，单位毫秒。取两倍周期：脉冲丢了也照常跑一拍，绝不死等。 */
-#define MOTOR_DRDY_TIMEOUT_MS 20U
+#define MOTOR_DRDY_TIMEOUT_MS 8U
+/* 黑匣子记录分频：1 = 每拍都记（250Hz，约 8.3 分钟/场次）；
+   2 = 隔一拍记（125Hz，约 16 分钟/场次）。调参期间用 1 拿最密的数据。 */
+#define MOTOR_BLACKBOX_SAMPLE_DIV 1U
 
 /* 微秒时基：用 DWT 周期计数器。170MHz 下 CYCCNT 约 25s 回绕，
    dt 的差值必须在原始计数器域做无符号减法（先除再减会在回绕处出错）。 */
@@ -69,6 +76,9 @@ static void MotorTest_TimebaseInit(void)
    用静态分配的二值信号量，不占 FreeRTOS 堆；中断里只发信号，不做任何 I2C。 */
 static StaticSemaphore_t imu_drdy_semaphore_storage;
 static SemaphoreHandle_t imu_drdy_semaphore;
+/* 临时统计：中断次数与超时兜底次数（验证后随 [R] 打印一起删除）。 */
+static volatile uint32_t imu_drdy_irq_count;
+static volatile uint32_t imu_drdy_timeout_count;
 
 /**
  * @brief IMU 数据就绪中断回调，由 EXTI0 的 HAL_GPIO_EXTI_Callback 调用。
@@ -82,6 +92,7 @@ void MotorTest_NotifyImuDrdyFromISR(void)
 
     if (imu_drdy_semaphore == NULL) return;
 
+    imu_drdy_irq_count++;
     xSemaphoreGiveFromISR(imu_drdy_semaphore, &higher_priority_task_woken);
     portYIELD_FROM_ISR(higher_priority_task_woken);
 }
@@ -91,7 +102,7 @@ void MotorTest_NotifyImuDrdyFromISR(void)
  *
  * 等不到就按超时返回，让控制环照常跑一拍：
  * INT 线断了或脉冲被吃掉时，飞机不会停在信号量上等死。
- * 台架实测：DRDY 完全不来时循环稳定跑在 50Hz（20ms 超时），不卡死。
+ * 台架实测：DRDY 完全不来时循环稳定跑在超时周期上，不卡死。
  * @return true 表示由中断唤醒；false 表示超时或信号量不可用。
  */
 static bool MotorTest_WaitImuDrdy(void)
@@ -103,8 +114,60 @@ static bool MotorTest_WaitImuDrdy(void)
         return false;
     }
 
-    return xSemaphoreTake(imu_drdy_semaphore, pdMS_TO_TICKS(MOTOR_DRDY_TIMEOUT_MS)) == pdTRUE;
+    if (xSemaphoreTake(imu_drdy_semaphore, pdMS_TO_TICKS(MOTOR_DRDY_TIMEOUT_MS)) == pdTRUE) return true;
+
+    imu_drdy_timeout_count++;
+    return false;
 }
+
+/* ===== 临时验证打印（验证后整段删除）=====
+   每秒打印一行 [R]，字段顺序依次为：
+   drdy(每秒中断数) tick(每秒拍数) timeout(累计) dt均值/峰值(us) work均值/峰值(us) err who
+   这一行故意写得很短（约 35 字符 ≈ 3.0ms @115200），好让它能塞进 4ms 的一拍里，
+   不至于因为打印本身吃掉采样、把 dt 统计弄脏。 */
+#define MOTOR_RATE_PRINT_MS 1000U
+
+static uint32_t rate_tick_count;
+static uint32_t rate_dt_sum_us;
+static uint32_t rate_dt_max_us;
+static uint32_t rate_work_sum_us;
+static uint32_t rate_work_max_us;
+static uint32_t rate_next_print_tick;
+
+/**
+ * @brief 累计一拍并每秒打印一次 [R]。
+ * @param dt_us 本拍周期（两次唤醒之间），单位微秒。
+ * @param work_us 本拍从唤醒到遥测发布结束的耗时，单位微秒。
+ * @param device IMU 设备对象，只读它的 i2c_error_count 并做一次身份自检。
+ */
+static void MotorTest_RateReport(uint32_t dt_us, uint32_t work_us, MPU6050_Device_t *device)
+{
+    uint8_t who_am_i = 0U;
+
+    rate_tick_count++;
+    rate_dt_sum_us += dt_us;
+    rate_work_sum_us += work_us;
+    if (dt_us > rate_dt_max_us) rate_dt_max_us = dt_us;
+    if (work_us > rate_work_max_us) rate_work_max_us = work_us;
+
+    if ((int32_t)(osKernelGetTickCount() - rate_next_print_tick) < 0) return;
+    rate_next_print_tick = osKernelGetTickCount() + MOTOR_RATE_PRINT_MS;
+
+    /* 顺便自检一次总线：读失败记 0xFF。 */
+    if (MPU6050_ReadWhoAmI(device, &who_am_i) != MPU6050_STATUS_OK) who_am_i = 0xFFU;
+
+    Debug_Printf("[R]%lu %lu %lu %lu %lu %lu %lu %lu %02X\r\n", (unsigned long)imu_drdy_irq_count, (unsigned long)rate_tick_count, (unsigned long)imu_drdy_timeout_count, (unsigned long)(rate_dt_sum_us / rate_tick_count), (unsigned long)rate_dt_max_us, (unsigned long)(rate_work_sum_us / rate_tick_count), (unsigned long)rate_work_max_us, (unsigned long)device->i2c_error_count, (unsigned int)who_am_i);
+
+    /* 打印完成后再清窗口，保证这一行的数字都在同一个窗口里。
+       timeout 是累计值，刻意不清零，方便发现偶发的一次超时。 */
+    imu_drdy_irq_count = 0U;
+    rate_tick_count = 0U;
+    rate_dt_sum_us = 0U;
+    rate_dt_max_us = 0U;
+    rate_work_sum_us = 0U;
+    rate_work_max_us = 0U;
+}
+/* ===== 临时验证打印结束 ===== */
 
 /**
  * @brief 把混控算出的四路脉宽写到对应电机。
@@ -217,6 +280,8 @@ void MotorTest_Task(void *argument)
     uint32_t next_battery_tick;
     uint32_t imu_cycles;
     uint32_t dt_us;
+    uint32_t work_us;
+    uint32_t blackbox_sample_divider;
     uint32_t i2c_fail_streak;
     float control_dt_s;
     float roll_corr_us;
@@ -277,6 +342,7 @@ void MotorTest_Task(void *argument)
         was_armed = false;
         last_imu_cycles = 0U;
         dt_us = 0U;
+        blackbox_sample_divider = 0U;
         next_battery_tick = osKernelGetTickCount();
         control_dt_s = IMU_DELTA_TIME_S;
         i2c_fail_streak = 0U;
@@ -287,7 +353,8 @@ void MotorTest_Task(void *argument)
                等不到就超时兜底照常跑一拍，INT 线断了也不会死锁。 */
             (void)MotorTest_WaitImuDrdy();
 
-            /* 实测本拍周期：在原始计数器域做无符号减法（天然处理回绕），再换算成微秒。 */
+            /* 本拍起点：既用来量周期，也用来量整拍耗时（读 IMU + 解算 + 混控 + 遥测）。
+               在原始计数器域做无符号减法（天然处理回绕），再换算成微秒。 */
             imu_cycles = DWT->CYCCNT;
             if (last_imu_cycles != 0U)
             {
@@ -329,8 +396,9 @@ void MotorTest_Task(void *argument)
                 continue;
             }
 
-            /* 控制环内禁止任何阻塞打印：每拍约 6ms 的串口发送会把 100Hz 拖到 60Hz 且抖动。
-               需要观察 IMU 数据时看黑匣子样本，或在本文件外临时挂调试代码。 */
+            /* 控制环内禁止长期保留阻塞打印：250Hz 下一拍只有 4ms，一行长日志就能吃掉采样。
+               本阶段临时挂了一行 1Hz、约 3ms 的 [R]（验证完必须删除）。
+               需要观察姿态数据时看黑匣子样本，或在本文件外临时挂调试代码。 */
             IMU_GyroBias_Apply(&bias_collector.bias, &imu_data);
             if (!IMU_Attitude_Update(&attitude, &imu_data, control_dt_s))
             {
@@ -449,11 +517,21 @@ void MotorTest_Task(void *argument)
                 sample.altitude_state = 0U;
                 sample.armed = 1U;
                 sample.connected = link.connected ? 1U : 0U;
-                Blackbox_SubmitSample(&sample);
+                /* 记录分频：250Hz 全记约 8.3 分钟/场次，分频 2 可翻倍到约 16 分钟。 */
+                blackbox_sample_divider++;
+                if (blackbox_sample_divider >= MOTOR_BLACKBOX_SAMPLE_DIV)
+                {
+                    blackbox_sample_divider = 0U;
+                    Blackbox_SubmitSample(&sample);
+                }
             }
             was_armed = armed;
 
             Radio_PublishFlightState(body.roll_deg, body.pitch_deg, body.yaw_deg, throttle_us, altitude_cm, vz_cms, true, AttitudeControl_IsInnerLoopEnabled(), armed);
+
+            /* 临时验证打印：本拍总耗时（读 IMU 到遥测发布结束），并输出每秒统计。 */
+            work_us = (uint32_t)(DWT->CYCCNT - imu_cycles) / (SystemCoreClock / 1000000U);
+            MotorTest_RateReport(dt_us, work_us, &imu_device);
         }
     }
 }
