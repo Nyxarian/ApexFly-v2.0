@@ -39,7 +39,11 @@ void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x40B285C2;
+  /* I2C1 快速模式 400kHz，取值来自 CubeMX（总线上升/下降时间按 100ns 计算）。
+     I2CCLK = PCLK1 = 170MHz，PRESC=4 → t_PRESC = 29.41ns；
+     SCLH=18、SCLL=54、SCLDEL=6、SDADEL=2。
+     旧值 0x40B285C2 对应 100kHz，14 字节读约 1.5ms，占满 10ms 控制周期的 15%。 */
+  hi2c1.Init.Timing = 0x40621236;
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
