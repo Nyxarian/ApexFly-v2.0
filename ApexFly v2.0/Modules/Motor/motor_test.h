@@ -21,6 +21,14 @@ extern "C" {
  */
 void MotorTest_Task(void *argument);
 
+/**
+ * @brief IMU 数据就绪（DRDY）中断回调，由 EXTI0 的 HAL_GPIO_EXTI_Callback 调用。
+ *
+ * 运行在中断上下文：只释放信号量通知控制任务，不做任何 I2C 访问。
+ * 一次 DRDY 对应一帧控制，用 SMPLRT_DIV 把芯片输出做成 100Hz。
+ */
+void MotorTest_NotifyImuDrdyFromISR(void);
+
 #ifdef __cplusplus
 }
 #endif

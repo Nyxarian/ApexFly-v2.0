@@ -203,8 +203,11 @@ MPU6050_Status_t MPU6050_Init(MPU6050_Device_t *device, I2C_HandleTypeDef *i2c)
         return status;
     }
 
-    /* 分频值为零，DLPF 开启时传感器输出采样率约为 1kHz。 */
-    status = MPU6050_WriteRegister(device, MPU6050_REG_SMPLRT_DIV, 0x00U);
+    /* 采样分频 9：DLPF 开启时陀螺内部输出为 1kHz，分频后输出寄存器与 DRDY 都是 100Hz，
+       与控制环 100Hz 一拍一帧对齐，每拍必然是新样本。
+       必须与 DRDY 中断采样配套：若改成 100Hz 输出却仍靠定时读，会周期性跨帧，
+       accel 与 gyro 会差整帧（10ms），比 1kHz 输出时的抽点更糟。 */
+    status = MPU6050_WriteRegister(device, MPU6050_REG_SMPLRT_DIV, 0x09U);
     /* 检查采样率配置。 */
     if (status != MPU6050_STATUS_OK)
     {

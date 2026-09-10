@@ -18,6 +18,7 @@
 #include "pid_table.h"
 #include "FreeRTOS.h"
 #include "main.h"
+#include "motor_test.h"
 #include "ra01sc.h"
 #include "spi.h"
 #include "task.h"
@@ -338,12 +339,20 @@ void Radio_Task(void *argument)
 /**
  * @brief STM32 HAL GPIO 外部中断统一回调。
  *
- * 只处理 LoRa DIO1。IMU_INT 当前没有任务在用，这里忽略。
- * 中断里只通知电台任务，禁止在这里做 SPI。
+ * 处理 LoRa DIO1 与 IMU 数据就绪两个来源。中断里只通知对应任务，
+ * 禁止在这里做 SPI 或 I2C。
  */
 void HAL_GPIO_EXTI_Callback(uint16_t gpio_pin)
 {
     BaseType_t higher_priority_task_woken;
+
+    /* IMU 数据就绪脉冲：只叫醒控制任务。
+       IMU_INT 在 gpio.c 里配成上升沿触发，一个脉冲只进一次中断。 */
+    if (gpio_pin == IMU_INT_Pin)
+    {
+        MotorTest_NotifyImuDrdyFromISR();
+        return;
+    }
 
     if ((gpio_pin != LORA_DIO1_Pin) || (radio_task_handle == NULL)) return;
 
