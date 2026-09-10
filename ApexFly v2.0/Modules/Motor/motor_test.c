@@ -26,7 +26,6 @@
 #include "blackbox.h"
 #include "cmsis_os.h"
 #include "control_link.h"
-#include "debug.h"
 #include "FreeRTOS.h"
 #include "i2c.h"
 #include "imu_attitude.h"
@@ -70,9 +69,6 @@ static void MotorTest_TimebaseInit(void)
    用静态分配的二值信号量，不占 FreeRTOS 堆；中断里只发信号，不做任何 I2C。 */
 static StaticSemaphore_t imu_drdy_semaphore_storage;
 static SemaphoreHandle_t imu_drdy_semaphore;
-/* 临时统计：中断次数与超时兜底次数（验证后随 [D] 打印一起删除）。 */
-static volatile uint32_t imu_drdy_irq_count;
-static volatile uint32_t imu_drdy_timeout_count;
 
 /**
  * @brief IMU 数据就绪中断回调，由 EXTI0 的 HAL_GPIO_EXTI_Callback 调用。
@@ -86,7 +82,6 @@ void MotorTest_NotifyImuDrdyFromISR(void)
 
     if (imu_drdy_semaphore == NULL) return;
 
-    imu_drdy_irq_count++;
     xSemaphoreGiveFromISR(imu_drdy_semaphore, &higher_priority_task_woken);
     portYIELD_FROM_ISR(higher_priority_task_woken);
 }
@@ -96,6 +91,7 @@ void MotorTest_NotifyImuDrdyFromISR(void)
  *
  * 等不到就按超时返回，让控制环照常跑一拍：
  * INT 线断了或脉冲被吃掉时，飞机不会停在信号量上等死。
+ * 台架实测：DRDY 完全不来时循环稳定跑在 50Hz（20ms 超时），不卡死。
  * @return true 表示由中断唤醒；false 表示超时或信号量不可用。
  */
 static bool MotorTest_WaitImuDrdy(void)
@@ -107,49 +103,8 @@ static bool MotorTest_WaitImuDrdy(void)
         return false;
     }
 
-    if (xSemaphoreTake(imu_drdy_semaphore, pdMS_TO_TICKS(MOTOR_DRDY_TIMEOUT_MS)) == pdTRUE) return true;
-
-    imu_drdy_timeout_count++;
-    return false;
+    return xSemaphoreTake(imu_drdy_semaphore, pdMS_TO_TICKS(MOTOR_DRDY_TIMEOUT_MS)) == pdTRUE;
 }
-
-/* ===== 临时验证打印：DRDY 计数 / 拍数 / 超时 / 实测周期（验证后整段删除）===== */
-#define MOTOR_DRDY_PRINT_MS 1000U
-
-static uint32_t drdy_tick_count;
-static uint32_t drdy_dt_sum_us;
-static uint32_t drdy_dt_max_us;
-static uint32_t drdy_next_print_tick;
-
-/**
- * @brief 每秒打印一行 [D]，用于确认"一次 DRDY = 一帧控制"。
- * @param dt_us 本拍到上一拍的实测间隔，单位微秒。
- * @param device IMU 设备对象，只读它的 i2c_error_count 并做一次身份自检。
- */
-static void MotorTest_DrdyReport(uint32_t dt_us, MPU6050_Device_t *device)
-{
-    uint8_t who_am_i = 0U;
-
-    drdy_tick_count++;
-    drdy_dt_sum_us += dt_us;
-    if (dt_us > drdy_dt_max_us) drdy_dt_max_us = dt_us;
-
-    if ((int32_t)(osKernelGetTickCount() - drdy_next_print_tick) < 0) return;
-    drdy_next_print_tick = osKernelGetTickCount() + MOTOR_DRDY_PRINT_MS;
-
-    /* 顺便自检一次总线：读失败记 0xFF。 */
-    if (MPU6050_ReadWhoAmI(device, &who_am_i) != MPU6050_STATUS_OK) who_am_i = 0xFFU;
-
-    Debug_Printf("[D] drdy=%lu tick=%lu timeout=%lu dt=%lu/%luus err=%lu who=0x%02X\r\n", (unsigned long)imu_drdy_irq_count, (unsigned long)drdy_tick_count, (unsigned long)imu_drdy_timeout_count, (unsigned long)((drdy_tick_count != 0U) ? (drdy_dt_sum_us / drdy_tick_count) : 0U), (unsigned long)drdy_dt_max_us, (unsigned long)device->i2c_error_count, (unsigned int)who_am_i);
-
-    /* 打印完成后再清窗口，保证这一行的数字都在同一个窗口里。
-       timeout 是累计值，刻意不清零，方便发现偶发的一次超时。 */
-    imu_drdy_irq_count = 0U;
-    drdy_tick_count = 0U;
-    drdy_dt_sum_us = 0U;
-    drdy_dt_max_us = 0U;
-}
-/* ===== 临时验证打印结束 ===== */
 
 /**
  * @brief 把混控算出的四路脉宽写到对应电机。
@@ -340,9 +295,6 @@ void MotorTest_Task(void *argument)
                 control_dt_s = MotorTest_Clampf((float)dt_us * 0.000001f, MOTOR_DT_MIN_S, MOTOR_DT_MAX_S);
             }
             last_imu_cycles = imu_cycles;
-
-            /* 临时验证打印：放在这里不会被任何 continue 跳过。 */
-            MotorTest_DrdyReport(dt_us, &imu_device);
 
             status = MPU6050_ReadData(&imu_device, &imu_data);
             if (status != MPU6050_STATUS_OK)
