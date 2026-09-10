@@ -1,0 +1,39 @@
+{
+    "version": 4,
+    "configurations": [
+        {
+            "name": "ApexFly v2.0 (Keil AC5 / armcc)",
+            "cStandard": "c99",
+            "intelliSenseMode": "gcc-arm",
+            "compilerPath": "F:/keil5/ARM/ARMCC/bin/armcc.exe",
+            "defines": [
+                "__CC_ARM",
+                "STM32G474xx",
+                "USE_HAL_DRIVER"
+            ],
+            "includePath": [
+                "${workspaceFolder}/../Core/Inc",
+                "${workspaceFolder}/../Drivers/STM32G4xx_HAL_Driver/Inc",
+                "${workspaceFolder}/../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy",
+                "${workspaceFolder}/../Middlewares/Third_Party/FreeRTOS/Source/include",
+                "${workspaceFolder}/../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2",
+                "${workspaceFolder}/../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F",
+                "${workspaceFolder}/../Drivers/CMSIS/Device/ST/STM32G4xx/Include",
+                "${workspaceFolder}/../Drivers/CMSIS/Include",
+                "${workspaceFolder}/../Modules/De_Bug",
+                "${workspaceFolder}/../Modules/IMU",
+                "${workspaceFolder}/../Modules/Motor",
+                "${workspaceFolder}/../Modules/LED",
+                "${workspaceFolder}/../Modules/Control",
+                "${workspaceFolder}/../Modules/Communication",
+                "${workspaceFolder}/../Modules/Flash",
+                "${workspaceFolder}/../Modules/Power",
+                "${workspaceFolder}/../Modules/Baro",
+                "${workspaceFolder}/../Modules/GPS",
+                "${workspaceFolder}/../Modules/Mag",
+                "${workspaceFolder}/.cmsis/include",
+                "${workspaceFolder}/RTE/_ApexFly_v2.0"
+            ]
+        }
+    ]
+}
