@@ -2,8 +2,9 @@
  * @file mag.c
  * @brief 磁力计任务：初始化 GY-273，定时读三轴，发布快照给串口观察。
  *
- * 芯片系到机体系：mx = -x，my = y，mz = z。一阶低通后再发布。
- * 安装丝印是 Y 前、X 左、Z 下；朝北/朝西实测后按 -X 前、Y 右来转。旧 Flash 硬铁偏移不能再用。
+ * 芯片系到机体系：mx = -y，my = x，mz = z。一阶低通后再发布。
+ * 实测（2026-09-10，换位置后）芯片电气轴是 X 右、Y 后、Z 下，与丝印标注差 180°。
+ * 换安装位置或转朝向都必须重新推导这个映射，并重做硬铁校准，旧 Flash 偏移不能再用。
  * 控制环不要在这里读 I2C。航向融合和偏航外环以后再接。
  * 硬铁校准可由串口或遥控 MAG_CAL 操作码触发；成功后黑匣子写入 0x002000，上电再加载。
  */
@@ -35,6 +36,7 @@ static MagCalibrationStatus_t mag_calibration;
 static float mag_mx_filtered_gauss;
 static float mag_my_filtered_gauss;
 static float mag_mz_filtered_gauss;
+
 static bool mag_body_filter_ready;
 
 static float Mag_WrapHeadingDeg(float heading_deg)
@@ -65,9 +67,13 @@ static float Mag_Lpf(float previous, float sample, bool ready)
 
 static void Mag_ChipToBody(float x_gauss, float y_gauss, float z_gauss, float *mx_gauss, float *my_gauss, float *mz_gauss)
 {
-    /* 丝印是 Y 前、X 左，但朝北≈270、朝西≈0，说明实际是 -X 前、Y 右。不要在航向上加 90°。 */
-    *mx_gauss = -x_gauss;
-    *my_gauss = y_gauss;
+    /* 换安装位置后实测（机头朝北、机身水平、|B|=0.51G）：
+       水平磁场完全落在芯片 -Y 上，Z 读数为正的完整垂直分量。
+       结论：芯片实际电气轴是 X -> 机体右、Y -> 机体后、Z -> 机体下，
+       与模块丝印标注差 180°。不要在航向上另加 90° 偏移。
+       注意：换位置或转朝向都必须重新推导本映射，并重做硬铁校准。 */
+    *mx_gauss = -y_gauss;
+    *my_gauss = x_gauss;
     *mz_gauss = z_gauss;
 }
 

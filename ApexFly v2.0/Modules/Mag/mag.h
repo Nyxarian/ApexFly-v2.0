@@ -43,11 +43,11 @@ typedef struct
     float y_gauss;
     float z_gauss;
     float magnitude_gauss;
-    /* 机体系前向磁场，单位高斯。实测 -芯片 x 朝机头。 */
+    /* 机体系前向磁场，单位高斯。实测 = -芯片 y。 */
     float mx_gauss;
-    /* 机体系右向磁场，单位高斯。实测芯片 y 朝右。 */
+    /* 机体系右向磁场，单位高斯。实测 = +芯片 x。 */
     float my_gauss;
-    /* 机体系下向磁场，单位高斯。芯片 Z 朝下，所以 mz = 芯片 z。 */
+    /* 机体系下向磁场，单位高斯。实测芯片 Z 朝下，所以 mz = +芯片 z。 */
     float mz_gauss;
     /* 机体系三轴合成模长，单位高斯。 */
     float body_magnitude_gauss;

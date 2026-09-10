@@ -70,6 +70,10 @@ BlackboxReader/_wave_*
 BlackboxDump/
 bin/
 
+# 阶段 0 台架测试导出的数据（串口工具产生，不纳入版本管理）
+apex_session_*.csv
+apex_raw_*.log
+
 # 课程资料、厂商手册、本机临时目录
 尚硅谷无人机/
 技术文档/
