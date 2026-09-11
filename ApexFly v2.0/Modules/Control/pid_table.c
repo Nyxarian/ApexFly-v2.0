@@ -6,14 +6,14 @@
  * 限幅语义（#26）：遥控只能设 out_max（MAX_RATE_DPS / MAX_CORRECTION_US）；
  * 积分限幅由 attitude_control.c 按 out_max 的固定比例推导，本文件不再写 i_limit。
  * trim 先存着给 GET/SET 显示，不送进控制目标角。
- * APEX_PID_HOVER_PWM_US 表示满杆油门上限；垂速 PID 项仍可读写，但不再参与电机输出。
+ * APEX_PID_HOVER_PWM_US 表示满杆油门上限；垂速 PID 项（ID 25~28）只保留读写通道，不参与电机输出。
+ * 高度控制器已于 2026-09-11 清除，这四项改为本地 PidTableAltitudeParams_t，等重做定高时再接回去。
  * MAG_CAL_STOP 成功后由黑匣子把硬铁偏移写入 0x002000；失败不覆盖旧值。
  */
 
 #include "pid_table.h"
 
 #include "attitude_control.h"
-#include "altitude_control.h"
 #include "blackbox.h"
 #include "FreeRTOS.h"
 #include "mag.h"
@@ -34,10 +34,33 @@
 #define PID_TABLE_CORR_MAX 300.0f
 #define PID_TABLE_TRIM_ABS_MAX 10.0f
 
+/* 高度参数暂存。定高模块已移除（2026-09-11 清理），这四项只作为协议 ID 的读写载体保留，
+   不参与任何控制。重新做定高时再接管：届时把它接回新控制器，协议 ID 25~29 与黑匣子格式不用改。 */
+typedef struct
+{
+    float vz_kp;
+    float vz_ki;
+    float vz_kd;
+    float hover_pwm_us;
+} PidTableAltitudeParams_t;
+
+#define PID_TABLE_ALTITUDE_DEFAULT_VZ_KP       100.0f
+#define PID_TABLE_ALTITUDE_DEFAULT_VZ_KI       0.0f
+#define PID_TABLE_ALTITUDE_DEFAULT_VZ_KD       0.0f
+#define PID_TABLE_ALTITUDE_DEFAULT_HOVER_PWM   1500.0f
+
+static void PidTable_AltitudeResetDefaults(PidTableAltitudeParams_t *altitude)
+{
+    altitude->vz_kp = PID_TABLE_ALTITUDE_DEFAULT_VZ_KP;
+    altitude->vz_ki = PID_TABLE_ALTITUDE_DEFAULT_VZ_KI;
+    altitude->vz_kd = PID_TABLE_ALTITUDE_DEFAULT_VZ_KD;
+    altitude->hover_pwm_us = PID_TABLE_ALTITUDE_DEFAULT_HOVER_PWM;
+}
+
 typedef struct
 {
     AttitudePidParams_t pid;
-    AltitudeControlParams_t altitude;
+    PidTableAltitudeParams_t altitude;
     float roll_trim_deg;
     float pitch_trim_deg;
 } PidTableState_t;
@@ -255,7 +278,6 @@ bool PidTable_ImportSnapshot(const int32_t *values_q10000)
     }
     taskEXIT_CRITICAL();
     AttitudeControl_ApplyParams(&pid_table.pid);
-    AltitudeControl_ApplyParams(&pid_table.altitude);
     return true;
 }
 
@@ -288,12 +310,11 @@ static void PidTable_LoadCompiledDefaults(void)
 {
     taskENTER_CRITICAL();
     pid_table.pid = *AttitudeControl_GetDefaultParams();
-    pid_table.altitude = *AltitudeControl_GetDefaultParams();
+    PidTable_AltitudeResetDefaults(&pid_table.altitude);
     pid_table.roll_trim_deg = 0.0f;
     pid_table.pitch_trim_deg = 0.0f;
     taskEXIT_CRITICAL();
     AttitudeControl_ApplyParams(&pid_table.pid);
-    AltitudeControl_ApplyParams(&pid_table.altitude);
 }
 
 void PidTable_Init(void)
@@ -303,11 +324,10 @@ void PidTable_Init(void)
     {
         memset(&pid_table, 0, sizeof(pid_table));
         pid_table.pid = *AttitudeControl_GetDefaultParams();
-        pid_table.altitude = *AltitudeControl_GetDefaultParams();
+        PidTable_AltitudeResetDefaults(&pid_table.altitude);
         pid_table_ready = true;
         taskEXIT_CRITICAL();
         AttitudeControl_ApplyParams(&pid_table.pid);
-        AltitudeControl_ApplyParams(&pid_table.altitude);
         return;
     }
     taskEXIT_CRITICAL();
@@ -345,7 +365,6 @@ void PidTable_HandleCommand(const ApexPidCommand_t *command, bool armed, ApexPid
         taskEXIT_CRITICAL();
         if (status == APEX_PID_STATUS_OK)
         {
-            AltitudeControl_ApplyParams(&pid_table.altitude);
             AttitudeControl_ApplyParams(&pid_table.pid);
         }
         taskENTER_CRITICAL();

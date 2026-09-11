@@ -333,7 +333,7 @@
               <MiscControls />
               <Define>USE_HAL_DRIVER,STM32G474xx</Define>
               <Undefine />
-              <IncludePath>../Core/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/Device/ST/STM32G4xx/Include;../Drivers/CMSIS/Include;../Modules/De_Bug;../Modules/IMU;../Modules/Motor;../Modules/LED;../Modules/Control;../Modules/Communication;../Modules/Flash;../Modules/Power;../Modules/Baro;../Modules/GPS;../Modules/Mag</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/Device/ST/STM32G4xx/Include;../Drivers/CMSIS/Include;../Modules/De_Bug;../Modules/IMU;../Modules/Motor;../Modules/LED;../Modules/Control;../Modules/Communication;../Modules/Flash;../Modules/Power;../Modules/GPS;../Modules/Mag</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -688,16 +688,6 @@
               <FilePath>..\Modules\IMU\imu_attitude.h</FilePath>
             </File>
             <File>
-              <FileName>attitude_debug.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Modules\IMU\attitude_debug.c</FilePath>
-            </File>
-            <File>
-              <FileName>attitude_debug.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Modules\IMU\attitude_debug.h</FilePath>
-            </File>
-            <File>
               <FileName>imu_level.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\Modules\IMU\imu_level.c</FilePath>
@@ -801,16 +791,6 @@
               <FileName>pid_table.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Modules\Control\pid_table.h</FilePath>
-            </File>
-            <File>
-              <FileName>altitude_control.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Modules\Control\altitude_control.c</FilePath>
-            </File>
-            <File>
-              <FileName>altitude_control.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Modules\Control\altitude_control.h</FilePath>
             </File>
           </Files>
         </Group>
@@ -921,41 +901,6 @@
               <FileName>gps.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Modules\GPS\gps.h</FilePath>
-            </File>
-          </Files>
-        </Group>
-        <Group>
-          <GroupName>Modules/Baro</GroupName>
-          <Files>
-            <File>
-              <FileName>spl06.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Modules\Baro\spl06.c</FilePath>
-            </File>
-            <File>
-              <FileName>spl06.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Modules\Baro\spl06.h</FilePath>
-            </File>
-            <File>
-              <FileName>baro.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Modules\Baro\baro.c</FilePath>
-            </File>
-            <File>
-              <FileName>baro.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Modules\Baro\baro.h</FilePath>
-            </File>
-            <File>
-              <FileName>altitude_est.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\Modules\Baro\altitude_est.c</FilePath>
-            </File>
-            <File>
-              <FileName>altitude_est.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\Modules\Baro\altitude_est.h</FilePath>
             </File>
           </Files>
         </Group>

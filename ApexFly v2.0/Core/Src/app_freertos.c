@@ -28,12 +28,10 @@
 #include "debug.h"
 #include "i2c.h"
 #include "imu_attitude.h"
-#include "attitude_debug.h"
 #include "imu_bias.h"
 #include "led.h"
 #include "motor_test.h"
 #include "mpu6050.h"
-#include "baro.h"
 #include "blackbox.h"
 #include "gps.h"
 #include "i2c2_lock.h"
@@ -48,10 +46,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define IMU_TEST_SAMPLE_PERIOD_MS     10U
-#define IMU_TEST_RETRY_PERIOD_MS      1000U
-#define IMU_TEST_BIAS_SAMPLE_COUNT    200U
-#define IMU_TEST_DELTA_TIME_S         0.01f
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -69,13 +63,6 @@ const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 128 * 4
-};
-/* Definitions for imuTestTask */
-osThreadId_t imuTestTaskHandle;
-const osThreadAttr_t imuTestTask_attributes = {
-  .name = "imuTestTask",
-  .priority = (osPriority_t) osPriorityNormal,
-  .stack_size = 512 * 4
 };
 /* Definitions for motorTestTask */
 osThreadId_t motorTestTaskHandle;
@@ -126,7 +113,6 @@ const osThreadAttr_t gpsTask_attributes = {
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
-void StartImuTestTask(void *argument);
 void StartMotorTestTask(void *argument);
 void StartLedTask(void *argument);
 void StartRadioTask(void *argument);
@@ -184,9 +170,6 @@ void MX_FREERTOS_Init(void) {
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* creation of imuTestTask */
-  imuTestTaskHandle = osThreadNew(StartImuTestTask, NULL, &imuTestTask_attributes);
-
   /* creation of motorTestTask */
   motorTestTaskHandle = osThreadNew(StartMotorTestTask, NULL, &motorTestTask_attributes);
 
@@ -232,36 +215,6 @@ void StartDefaultTask(void *argument)
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
-}
-
-/* USER CODE BEGIN Header_StartImuTestTask */
-/**
-  * @brief  IMU 姿态测试任务。
-  *         上电静置采集陀螺仪零偏后，按 100Hz 输出映射后的机体系姿态角。
-  *
-  *         映射前（芯片系，滤波器内部仍用这组值）：
-  *         roll_deg  前倾为负（往前飞），后倾为正（往后飞/抬头）
-  *         pitch_deg 左倾为负（往左飞），右倾为正（往右飞）
-  *         yaw_deg   逆时针为正，顺时针为负
-  *
-  *         映射后 JustFloat 通道（飞控习惯）：
-  *         I0 = Roll  右倾为正（往右飞），左倾为负（往左飞）
-  *         I1 = Pitch 抬头为正（往后飞），低头为负（往前飞）
-  *         I2 = Yaw   顺时针为正（机头右转），逆时针为负
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_StartImuTestTask */
-void StartImuTestTask(void *argument)
-{
-  /* USER CODE BEGIN StartImuTestTask */
-  /* 联动测试期间 IMU 由 motorTestTask 独占，避免两路同时读 I2C。 */
-  (void)argument;
-  for (;;)
-  {
-    osDelay(1000);
-  }
-  /* USER CODE END StartImuTestTask */
 }
 
 /* USER CODE BEGIN Header_StartMotorTestTask */
