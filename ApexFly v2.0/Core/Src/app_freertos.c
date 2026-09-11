@@ -37,6 +37,7 @@
 #include "i2c2_lock.h"
 #include "mag.h"
 #include "radio.h"
+#include "tof.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -106,6 +107,14 @@ const osThreadAttr_t gpsTask_attributes = {
   .priority = (osPriority_t) osPriorityBelowNormal,
   .stack_size = 512 * 4
 };
+/* Definitions for tofTask */
+osThreadId_t tofTaskHandle;
+const osThreadAttr_t tofTask_attributes = {
+  .name = "tofTask",
+  /* 与 magtask 同级：两者共用 I2C2，同级 + 每拍让出 CPU，避免任何一方被饿死。 */
+  .priority = (osPriority_t) osPriorityBelowNormal,
+  .stack_size = 512 * 4
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -119,6 +128,7 @@ void StartRadioTask(void *argument);
 void StartBlackboxTask(void *argument);
 void StartMagTask(void *argument);
 void StartGpsTask(void *argument);
+void StartTofTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -187,6 +197,9 @@ void MX_FREERTOS_Init(void) {
 
   /* creation of gpsTask */
   gpsTaskHandle = osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
+
+  /* creation of tofTask */
+  tofTaskHandle = osThreadNew(StartTofTask, NULL, &tofTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -303,6 +316,20 @@ void StartGpsTask(void *argument)
   /* USER CODE BEGIN StartGpsTask */
   GPS_Task(argument);
   /* USER CODE END StartGpsTask */
+}
+
+/* USER CODE BEGIN Header_StartTofTask */
+/**
+  * @brief  激光测距任务。I2C2 上与磁力计共用总线，只发布距离快照，不参与控制。
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartTofTask */
+void StartTofTask(void *argument)
+{
+  /* USER CODE BEGIN StartTofTask */
+  ToF_Task(argument);
+  /* USER CODE END StartTofTask */
 }
 
 /* Private application code --------------------------------------------------*/

@@ -45,6 +45,7 @@
 #include "radio.h"
 #include "semphr.h"
 #include "task.h"
+#include "tof.h"
 #include <string.h>
 
 #define ESC_ARM_WAIT_MS 3000U
@@ -438,8 +439,11 @@ void MotorTest_Task(void *argument)
 
             IMU_Level_Apply(&level_collector.offset, &body);
 
-            /* 高度模块已移除，高度和垂速遥测固定为 0，不读 I2C2。 */
-            altitude_cm = 0;
+            /* 高度直接读 ToF 任务算好的结果：只做一次 32 位整数读取，
+               不碰 I2C2 锁，绝不会拖慢 250Hz 控制环。
+               该值是实测距离换算的厘米数，不含零点相减，任何时候（含上锁）都有效；
+               测不到时 ToF 内部会保持上一次的值。垂速暂不做，固定 0。 */
+            altitude_cm = ToF_GetAltitudeCm();
             vz_cms = 0;
 
             if ((int32_t)(osKernelGetTickCount() - next_battery_tick) >= 0)

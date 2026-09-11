@@ -333,7 +333,7 @@
               <MiscControls />
               <Define>USE_HAL_DRIVER,STM32G474xx</Define>
               <Undefine />
-              <IncludePath>../Core/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/Device/ST/STM32G4xx/Include;../Drivers/CMSIS/Include;../Modules/De_Bug;../Modules/IMU;../Modules/Motor;../Modules/LED;../Modules/Control;../Modules/Communication;../Modules/Flash;../Modules/Power;../Modules/GPS;../Modules/Mag</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/Device/ST/STM32G4xx/Include;../Drivers/CMSIS/Include;../Modules/De_Bug;../Modules/IMU;../Modules/Motor;../Modules/LED;../Modules/Control;../Modules/Communication;../Modules/Flash;../Modules/Power;../Modules/GPS;../Modules/Mag;../Modules/ToF</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -936,6 +936,31 @@
               <FileName>mag.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Modules\Mag\mag.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Modules/ToF</GroupName>
+          <Files>
+            <File>
+              <FileName>vl53l1x.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Modules\ToF\vl53l1x.c</FilePath>
+            </File>
+            <File>
+              <FileName>vl53l1x.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Modules\ToF\vl53l1x.h</FilePath>
+            </File>
+            <File>
+              <FileName>tof.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Modules\ToF\tof.c</FilePath>
+            </File>
+            <File>
+              <FileName>tof.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Modules\ToF\tof.h</FilePath>
             </File>
           </Files>
         </Group>
