@@ -11,9 +11,13 @@
  * 3. 静置采集陀螺仪零偏 200 点
  * 4. 静置采集机体系横滚/俯仰水平零点 200 点，之后控制角减这个平均
  * 5. 停在 1000us 等待遥控
- * 6. 100Hz：刷新失联 → 读快照 → 已解锁则把油门杆直通映射成基础油门，再进串级混控
+ * 6. 250Hz：刷新失联 → 读快照 → 已解锁则把油门杆映射成基础油门（再经速率限制），然后进串级混控
  *
- * 油门映射：最低固定 1000us，最高由 PID 表 APEX_PID_HOVER_PWM_US 决定，默认 1500us。
+ * 油门映射：最低固定 1000us，最高由 PID 表 APEX_PID_HOVER_PWM_US 决定，默认 1600us。
+ * 映射结果再经一阶速率限制（不对称：上升 800us/s、下降 300us/s），消除摇杆快动造成的推力阶跃，
+ * 让降落从"瞬间失去升力"变成"缓慢下沉"，给飞行员补油的反应时间。
+ * 注意：速率限制只改变油门的"变化快慢"，不改变稳态映射；摇杆停在悬停点以下仍会稳态下坠，
+ * 那属于定高的职责。将来接入定高（激光测距）时，需评估是否与本层斜率限制叠加。
  * 气压计任务已停用，I2C2 只给磁力计。高度遥测先填 0，altitude_est 源码保留。
  * 解锁后黑匣子样本把磁航向写进 target_vz_cms；电台遥测另填 home_distance_m。
  * 偏航杆中位锁磁航向，出死区切速率。横滚俯仰杆映射成目标角，满杆约 ±10°，再加 Trim。YAW ANGLE 为 0 时偏航外环不出力。
@@ -62,6 +66,14 @@
    2 = 隔一拍记（125Hz，约 16 分钟/场次）。调参期间用 1 拿最密的数据。 */
 #define MOTOR_BLACKBOX_SAMPLE_DIV 1U
 
+/* 油门速率限制（不对称）：上升快、下降慢。
+   上升 800us/s：满行程 1000->1600 约 0.75s，保留"爬升要跟手"的能力。
+   下降 300us/s：满行程 1600->1000 约 2.0s，把"瞬间掉升力"变成"缓慢下沉"。
+   依据：悬停附近推力斜率约 3.1gf/us，300us/s 下每拍(4ms)只变 1.2us，
+   远小于"温和修正"所需的 16us 量级，不影响姿态环正常补油。 */
+#define MOTOR_THROTTLE_SLEW_UP_US_PER_S   800.0f
+#define MOTOR_THROTTLE_SLEW_DOWN_US_PER_S 300.0f
+
 /* 微秒时基：用 DWT 周期计数器。170MHz 下 CYCCNT 约 25s 回绕，
    dt 的差值必须在原始计数器域做无符号减法（先除再减会在回绕处出错）。 */
 static void MotorTest_TimebaseInit(void)
@@ -75,6 +87,12 @@ static void MotorTest_TimebaseInit(void)
    用静态分配的二值信号量，不占 FreeRTOS 堆；中断里只发信号，不做任何 I2C。 */
 static StaticSemaphore_t imu_drdy_semaphore_storage;
 static SemaphoreHandle_t imu_drdy_semaphore;
+
+/* 油门速率限制器的当前值（跨拍保持）。因为是速率限制，本模块不再是无状态的。
+   复位时机共三处，均与既有的 throttle_us = MOTOR_PWM_MIN_US 成对出现：
+   ①任务初始化 ②外层循环重初始化 IMU ③未解锁分支。
+   漏掉第 ③ 处会导致解锁瞬间从上一轮的残留值开始爬升。 */
+static float throttle_slew_us = (float)MOTOR_PWM_MIN_US;
 
 /**
  * @brief IMU 数据就绪中断回调，由 EXTI0 的 HAL_GPIO_EXTI_Callback 调用。
@@ -154,6 +172,49 @@ static float MotorTest_Absf(float value)
     return (value < 0.0f) ? -value : value;
 }
 
+/**
+ * @brief 对基础油门做一阶速率限制（不对称），消除摇杆快动造成的推力阶跃。
+ * @param current_us 上一拍已输出的油门，单位微秒。
+ * @param target_us  本拍由摇杆映射得到的目标油门，单位微秒。
+ * @param dt_s       本拍实际周期，单位秒（已由控制环限幅到 2~12ms）。
+ * @return 限速后的油门，单位微秒，落在 [MOTOR_PWM_MIN_US, MOTOR_PWM_MAX_US]。
+ * @note 上升用 MOTOR_THROTTLE_SLEW_UP_US_PER_S，下降用 _DOWN_。
+ *       差值小于一步时直接到位，避免无谓地缓慢逼近。
+ *       本函数不解决"摇杆停在悬停点以下"的稳态下坠——那属于定高的职责。
+ */
+static float MotorTest_ThrottleRampLimit(float current_us, float target_us, float dt_s)
+{
+    float max_step_us;
+    float output_us;
+
+    if (dt_s <= 0.0f)
+    {
+        return current_us;
+    }
+
+    max_step_us = (target_us >= current_us)
+                      ? (MOTOR_THROTTLE_SLEW_UP_US_PER_S * dt_s)
+                      : (MOTOR_THROTTLE_SLEW_DOWN_US_PER_S * dt_s);
+
+    if (target_us > (current_us + max_step_us))
+    {
+        output_us = current_us + max_step_us;
+    }
+    else if (target_us < (current_us - max_step_us))
+    {
+        output_us = current_us - max_step_us;
+    }
+    else
+    {
+        output_us = target_us;
+    }
+
+    if (output_us < (float)MOTOR_PWM_MIN_US) output_us = (float)MOTOR_PWM_MIN_US;
+    if (output_us > (float)MOTOR_PWM_MAX_US) output_us = (float)MOTOR_PWM_MAX_US;
+
+    return output_us;
+}
+
 /* 水平零点采集门禁：机体必须静止、接近水平、加计模长正常。
    任一不满足就清空累加器重新开始，避免把斜放或晃动采成永久零点。 */
 static bool MotorTest_LevelSampleValid(const MPU6050_Data_t *data, const IMU_BodyAttitude_t *body)
@@ -220,6 +281,7 @@ void MotorTest_Task(void *argument)
     bool armed;
     bool was_armed;
     uint16_t throttle_us;
+    uint16_t throttle_target_us;
     uint32_t last_imu_cycles;
     uint32_t next_battery_tick;
     uint32_t imu_cycles;
@@ -245,6 +307,8 @@ void MotorTest_Task(void *argument)
     Battery_Init();
     memset(&body, 0, sizeof(body));
     throttle_us = MOTOR_PWM_MIN_US;
+    throttle_slew_us = (float)MOTOR_PWM_MIN_US;
+    throttle_target_us = MOTOR_PWM_MIN_US;
     altitude_cm = 0;
     vz_cms = 0;
     mag_heading_cdeg = -1;
@@ -288,6 +352,7 @@ void MotorTest_Task(void *argument)
         blackbox_sample_divider = 0U;
         next_battery_tick = osKernelGetTickCount();
         control_dt_s = IMU_DELTA_TIME_S;
+        throttle_slew_us = (float)MOTOR_PWM_MIN_US;
         i2c_fail_streak = 0U;
     
         for (;;)
@@ -393,6 +458,7 @@ void MotorTest_Task(void *argument)
             if (!armed)
             {
                 throttle_us = MOTOR_PWM_MIN_US;
+                throttle_slew_us = (float)MOTOR_PWM_MIN_US;
                 AttitudeControl_Reset();
                 Motor_Disarm();
                 if (was_armed) Blackbox_NotifyDisarmed();
@@ -403,10 +469,15 @@ void MotorTest_Task(void *argument)
                 {
                     Blackbox_NotifyArmed();
                 }
-                /* 油门杆直接映射成基础推力，不再经过垂速环。 */
+                /* 油门杆先映射成基础推力（映射本身与改动前一致），再经速率限制，不经过垂速环。
+                   速率不对称：上升 800、下降 300 us/s。
+                   状态回喂的是限速后的【浮点值】，不是取整后的整数——若回喂整数，
+                   每拍丢弃小数会系统性吃掉速率（实测 800->750、300->250）。 */
                 mag_heading_cdeg = MotorTest_MagHeadingCdeg(&mag_calibration_valid);
                 PidTable_GetAttitudeTrimDeg(&roll_trim_deg, &pitch_trim_deg);
-                throttle_us = MotorTest_MapStickToThrottleUs(link.command.throttle);
+                throttle_target_us = MotorTest_MapStickToThrottleUs(link.command.throttle);
+                throttle_slew_us = MotorTest_ThrottleRampLimit(throttle_slew_us, (float)throttle_target_us, control_dt_s);
+                throttle_us = (uint16_t)(throttle_slew_us + 0.5f);
                 /* 低油门先保持四路等值，避免地面姿态误差让单路电机提前抬升。 */
                 if (throttle_us <= MOTOR_ATTITUDE_ENABLE_PWM_US)
                 {

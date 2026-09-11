@@ -39,6 +39,13 @@
 #define ATTITUDE_STICK_ABS_MAX 1000.0f
 #define ATTITUDE_STICK_MAX_ANGLE_DEG 10.0f
 
+/* 俯仰摇杆方向开关，只作用于"摇杆 -> 目标俯仰角"这一支：
+   +1 = 推杆向前使机头下俯（前飞），-1 = 反相。
+   不影响姿态反馈方向、mixer_sign、混控符号（那些是实机验证过的）。
+   出现"推杆向前却向后飞"时，优先在遥控端把俯仰通道反向；
+   若遥控端改不了，把这里改成 -1 即可，只动这一行。 */
+#define ATTITUDE_PITCH_STICK_SIGN (-1.0f)
+
 /* 目标信号斜率限制（#29）。
    杆量、Trim、链路跳变都会让目标值一步到位，外环误差跟着跳，
    内环 P 项就会瞬间变大（快速打杆时可达限幅的一半以上）。
@@ -289,7 +296,9 @@ bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, f
     /* 杆量映射成目标角后再加 Trim；Trim 只偏置中位，不把满杆角再放大。
        映射结果先过斜率限制（#29），杆量/Trim 跳变不会让目标角一步到位。 */
     roll_setpoint_raw_deg = AttitudeControl_StickToAngleDeg(roll_stick) + roll_trim_deg;
-    pitch_setpoint_raw_deg = AttitudeControl_StickToAngleDeg(pitch_stick) + pitch_trim_deg;
+    /* 俯仰摇杆按 ATTITUDE_PITCH_STICK_SIGN 取向后，再加 Trim。
+       Trim 加在取反之后，免得它的符号跟着一起翻。 */
+    pitch_setpoint_raw_deg = (ATTITUDE_PITCH_STICK_SIGN * AttitudeControl_StickToAngleDeg(pitch_stick)) + pitch_trim_deg;
     roll_setpoint_limited_deg = AttitudeControl_SlewLimit(roll_setpoint_limited_deg, roll_setpoint_raw_deg, ATTITUDE_TARGET_SLEW_DPS * dt_s);
     pitch_setpoint_limited_deg = AttitudeControl_SlewLimit(pitch_setpoint_limited_deg, pitch_setpoint_raw_deg, ATTITUDE_TARGET_SLEW_DPS * dt_s);
     mixer_input.throttle_us = throttle_us;
