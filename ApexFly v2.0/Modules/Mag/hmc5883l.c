@@ -126,6 +126,9 @@ bool Mag_ScanBus(I2C_HandleTypeDef *i2c, MagProbe_t *probe)
         return false;
     }
 
+    /* 7 位地址的有效范围是 0x08～0x77。这里逐地址探测一遍，
+       结果用于排查"新挂的设备地址撞不撞车、接线通不通"。
+       注意不要假设总线上只有哪些设备——扫到几个就记几个。 */
     for (address_7bit = 0x08U; address_7bit <= 0x77U; address_7bit++)
     {
         if (HAL_I2C_IsDeviceReady(i2c, (uint16_t)(address_7bit << 1), 1U, MAG_I2C_TIMEOUT_MS) != HAL_OK) continue;

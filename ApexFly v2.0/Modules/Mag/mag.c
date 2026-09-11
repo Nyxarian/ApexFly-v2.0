@@ -136,6 +136,47 @@ static void Mag_ClearSnapshot(bool keep_chip)
     taskEXIT_CRITICAL();
 }
 
+/**
+ * @brief 打印一次 I2C2 总线扫描结果：应答的设备个数与全部 7 位地址。
+ *
+ * 用途是排查"新挂的设备地址撞不撞车、接线通不通"。当前 I2C2 上应有两个设备：
+ *   0x2C = QMC5883P 磁力计
+ *   0x29 = VL53L1X 激光测距（接入后）
+ * 缺了 0x2C 说明磁力计没通；缺了 0x29 说明激光没接好或 XSHUT 没被拉高。
+ *
+ * 只在每次初始化尝试时调一次：成功时上电打一行，失败时随 1 秒重试节奏重打，便于插拔排查。
+ * 本函数不做总线访问，打印不会占用 I2C2。
+ */
+static void Mag_PrintBusScan(const MagProbe_t *probe)
+{
+    uint8_t index;
+    /* 每个地址占 5 字节（" 0xNN"），末尾留 1 字节给终止符。 */
+    char addrs[(sizeof(probe->found_addrs) * 5U) + 1U];
+    uint16_t used = 0U;
+
+    if (probe == NULL) return;
+
+    if (probe->found_count == 0U)
+    {
+        Debug_Printf("[I2C2] scan: no device responded (fail=%u).\r\n", (unsigned)probe->fail_code);
+        return;
+    }
+
+    for (index = 0U; index < probe->found_count; index++)
+    {
+        /* 每个地址占 5 字节：" 0xNN" */
+        addrs[used] = ' ';
+        addrs[used + 1U] = '0';
+        addrs[used + 2U] = 'x';
+        addrs[used + 3U] = "0123456789ABCDEF"[(probe->found_addrs[index] >> 4) & 0x0FU];
+        addrs[used + 4U] = "0123456789ABCDEF"[probe->found_addrs[index] & 0x0FU];
+        used = (uint16_t)(used + 5U);
+    }
+    addrs[used] = '\0';
+
+    Debug_Printf("[I2C2] scan: found %u device(s):%s\r\n", (unsigned)probe->found_count, addrs);
+}
+
 void Mag_Task(void *argument)
 {
     MagRawData_t data;
@@ -150,6 +191,7 @@ void Mag_Task(void *argument)
     for (;;)
     {
         (void)Mag_ScanBus(&hi2c2, &probe);
+        Mag_PrintBusScan(&probe);
         if (!Mag_DeviceInit(&mag_device, &hi2c2))
         {
             if ((probe.fail_code == 0U) && (probe.found_count > 0U)) probe.fail_code = 2U;
