@@ -26,12 +26,12 @@
  *
  * ── 为什么不做"地面零点" ─────────────────────────────────────
  * 曾用"解锁时采一次地面读数当零点，高度 = 距离 − 零点"的方案，已废弃，原因：
- *   1. 镜头装在机身底部，机械偏置只有约 2cm，为一个常数引入整套状态机不值；
+ *   1. 镜头固定在机架最下方，机械偏置只有约 8mm（放在平面上就是 8mm），为一个常数引入整套状态机不值；
  *   2. 零点必须绑定"飞机确实在地面"的时刻，一旦和控制环的解锁/上锁状态耦合，
  *      就会出现"上锁时零点被反复清掉、高度恒 0"这类问题（已实际发生过）；
  *   3. 机身倾斜时真正要补的是 h = d·cosθ（θ 取 MPU6050 的横滚/俯仰），
  *      零点相减并不能解决倾斜误差，减的只是一个常数。
- * 因此这里直接输出实测距离换算的厘米值，保留约 2cm 的安装偏置。
+ * 因此这里直接输出实测距离换算的厘米值，保留约 8mm 的安装偏置。
  * 倾斜补偿留到将来做定高时再加，那时由使用方拿姿态角做 d·cosθ。
  */
 
@@ -41,6 +41,7 @@
 #include "debug.h"
 #include "i2c.h"
 #include "task.h"
+#include "vertical_est.h"
 #include "vl53l1x.h"
 
 /* 步进周期。 */
@@ -105,6 +106,8 @@ void ToF_Task(void *argument)
     ToF_Phase_t phase;
     uint32_t last_fresh_tick;
     uint32_t next_print_tick;
+    uint32_t last_step_tick;
+    uint32_t step_now;
     uint8_t wait_count;
     uint8_t miss_rounds;
 
@@ -115,6 +118,8 @@ void ToF_Task(void *argument)
     miss_rounds = 0U;
     last_fresh_tick = osKernelGetTickCount();
     next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
+    last_step_tick = osKernelGetTickCount();
+    VerticalEst_Init();
 
     for (;;)
     {
@@ -142,6 +147,9 @@ void ToF_Task(void *argument)
             phase = TOF_PHASE_WAIT;
             wait_count = 0U;
             miss_rounds = 0U;
+            /* 激光重新初始化（含掉线重连）后估计器也要重新起步，
+               否则会拿初始化前的旧高度继续差分，算出一个假的垂速。 */
+            VerticalEst_Reset();
             Debug_Printf("[TOF] init ok: id=0x%04X range=short step=%ums\r\n",
                          (unsigned)VL53L1X_ReadModelId(&tof_device), (unsigned)TOF_STEP_MS);
         }
@@ -204,7 +212,7 @@ void ToF_Task(void *argument)
 
                     /* 高度仍然由【滤波值】换算，所以显示与遥测和 H2 之前完全一致。
                        直接换算成厘米，不减任何零点：镜头装在机身底部，
-                       实测值里就含着约 2cm 的安装偏置，当作固定读数保留。
+                       实测值里就含着约 8mm 的安装偏置（放在平面上读数约 1cm），当作固定读数保留。
                        毫米 → 厘米四舍五入，直接整除会把 19mm 砍成 1cm。
                        距离是物理量，不可能为负，所以不需要负值分支。 */
                     tof_snapshot.altitude_cm = (int32_t)(((uint32_t)tof_snapshot.distance_filtered_mm + 5U) / 10U);
@@ -250,11 +258,22 @@ void ToF_Task(void *argument)
 
         tof_snapshot.age_ms = (uint32_t)(osKernelGetTickCount() - last_fresh_tick);
 
+        /* ── 高度/垂速估计（H3）：先挂在本任务里跑（约 12Hz），H5 再搬进控制环。 ──
+           每一步都调用，内部靠 ToF 的 valid_count 判断有没有新数据，所以
+           在 12Hz 还是 250Hz 调用都不需要改估计器的参数。
+           dt 用实测的步进间隔，不写死 20ms（实测一步约 20.8ms）。 */
+        step_now = osKernelGetTickCount();
+        VerticalEst_Update((float)(step_now - last_step_tick) * 0.001f);
+        last_step_tick = step_now;
+
         /* ── 串口打印，按时间节流。 ── */
         if ((int32_t)(osKernelGetTickCount() - next_print_tick) >= 0)
         {
+            VerticalEstState_t vertical_state;
+
             next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
-            Debug_Printf("[TOF] raw=%umm filt=%umm alt=%ldcm status=%u n=%lu fresh=%u age=%lums err=%lu\r\n",
+            VerticalEst_GetState(&vertical_state);
+            Debug_Printf("[TOF] raw=%umm filt=%umm alt=%ldcm status=%u n=%lu fresh=%u age=%lums err=%lu | h=%.1fcm vz=%+.1fcm/s v=%u sc=%lu\r\n",
                          (unsigned)tof_snapshot.distance_raw_mm,
                          (unsigned)tof_snapshot.distance_filtered_mm,
                          (long)tof_snapshot.altitude_cm,
@@ -262,7 +281,11 @@ void ToF_Task(void *argument)
                          (unsigned long)tof_snapshot.valid_count,
                          tof_snapshot.fresh ? 1U : 0U,
                          (unsigned long)tof_snapshot.age_ms,
-                         (unsigned long)tof_snapshot.error_count);
+                         (unsigned long)tof_snapshot.error_count,
+                         (double)vertical_state.height_cm,
+                         (double)vertical_state.vz_cms,
+                         vertical_state.valid ? 1U : 0U,
+                         (unsigned long)vertical_state.sample_count);
         }
 
         /* 每步都让出 CPU：本任务与 magtask 共用 I2C2。 */

@@ -53,7 +53,7 @@ typedef struct
     uint16_t throttle_us;
     /* 四路电机脉宽，单位微秒。 */
     uint16_t motor_us[4];
-    /* 离地高度，单位厘米。当前由激光测距直接给出，含约 2cm 安装偏置。 */
+    /* 离地高度，单位厘米。当前由激光测距直接给出，含约 0.8cm 安装偏置（放在平面上读数约 1cm）。 */
     int16_t altitude_cm;
     /* 垂直速度，单位厘米每秒，向上为正。 */
     int16_t vz_cms;

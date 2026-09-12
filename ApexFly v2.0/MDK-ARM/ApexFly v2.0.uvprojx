@@ -792,6 +792,16 @@
               <FileType>5</FileType>
               <FilePath>..\Modules\Control\pid_table.h</FilePath>
             </File>
+            <File>
+              <FileName>vertical_est.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Modules\Control\vertical_est.c</FilePath>
+            </File>
+            <File>
+              <FileName>vertical_est.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Modules\Control\vertical_est.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
