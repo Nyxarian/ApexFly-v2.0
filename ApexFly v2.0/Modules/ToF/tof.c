@@ -40,6 +40,7 @@
 #include "cmsis_os.h"
 #include "debug.h"
 #include "i2c.h"
+#include "motor_test.h"
 #include "task.h"
 #include "vertical_est.h"
 #include "vl53l1x.h"
@@ -106,8 +107,6 @@ void ToF_Task(void *argument)
     ToF_Phase_t phase;
     uint32_t last_fresh_tick;
     uint32_t next_print_tick;
-    uint32_t last_step_tick;
-    uint32_t step_now;
     uint8_t wait_count;
     uint8_t miss_rounds;
 
@@ -118,8 +117,6 @@ void ToF_Task(void *argument)
     miss_rounds = 0U;
     last_fresh_tick = osKernelGetTickCount();
     next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
-    last_step_tick = osKernelGetTickCount();
-    VerticalEst_Init();
 
     for (;;)
     {
@@ -147,9 +144,6 @@ void ToF_Task(void *argument)
             phase = TOF_PHASE_WAIT;
             wait_count = 0U;
             miss_rounds = 0U;
-            /* 激光重新初始化（含掉线重连）后估计器也要重新起步，
-               否则会拿初始化前的旧高度继续差分，算出一个假的垂速。 */
-            VerticalEst_Reset();
             Debug_Printf("[TOF] init ok: id=0x%04X range=short step=%ums\r\n",
                          (unsigned)VL53L1X_ReadModelId(&tof_device), (unsigned)TOF_STEP_MS);
         }
@@ -258,13 +252,11 @@ void ToF_Task(void *argument)
 
         tof_snapshot.age_ms = (uint32_t)(osKernelGetTickCount() - last_fresh_tick);
 
-        /* ── 高度/垂速估计（H3）：先挂在本任务里跑（约 12Hz），H5 再搬进控制环。 ──
-           每一步都调用，内部靠 ToF 的 valid_count 判断有没有新数据，所以
-           在 12Hz 还是 250Hz 调用都不需要改估计器的参数。
-           dt 用实测的步进间隔，不写死 20ms（实测一步约 20.8ms）。 */
-        step_now = osKernelGetTickCount();
-        VerticalEst_Update((float)(step_now - last_step_tick) * 0.001f);
-        last_step_tick = step_now;
+        /* ── 高度/垂速估计器已搬进控制环（H4'）─────────────────────
+           原因：倾斜补偿要用机体系姿态角，而姿态角只有控制环算得出来。
+           本任务不再驱动估计器，只在这里**读**它的状态来打印
+           ——控制环里禁止打印（一行日志约 10ms，会吃掉两拍 4ms 预算），
+           所以"谁驱动"和"谁打印"分开：驱动在控制环，打印留在这里。 */
 
         /* ── 串口打印，按时间节流。 ── */
         if ((int32_t)(osKernelGetTickCount() - next_print_tick) >= 0)
@@ -273,7 +265,7 @@ void ToF_Task(void *argument)
 
             next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
             VerticalEst_GetState(&vertical_state);
-            Debug_Printf("[TOF] raw=%umm filt=%umm alt=%ldcm status=%u n=%lu fresh=%u age=%lums err=%lu | h=%.1fcm vz=%+.1fcm/s v=%u sc=%lu\r\n",
+            Debug_Printf("[TOF] raw=%umm filt=%umm alt=%ldcm status=%u n=%lu fresh=%u age=%lums err=%lu | h=%.1fcm vz=%+.1fcm/s v=%u sc=%lu | loop=%luus\r\n",
                          (unsigned)tof_snapshot.distance_raw_mm,
                          (unsigned)tof_snapshot.distance_filtered_mm,
                          (long)tof_snapshot.altitude_cm,
@@ -285,7 +277,8 @@ void ToF_Task(void *argument)
                          (double)vertical_state.height_cm,
                          (double)vertical_state.vz_cms,
                          vertical_state.valid ? 1U : 0U,
-                         (unsigned long)vertical_state.sample_count);
+                         (unsigned long)vertical_state.sample_count,
+                         (unsigned long)MotorTest_TakeMaxFrameUs());
         }
 
         /* 每步都让出 CPU：本任务与 magtask 共用 I2C2。 */

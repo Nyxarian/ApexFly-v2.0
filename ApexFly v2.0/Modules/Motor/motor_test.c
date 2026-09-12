@@ -46,6 +46,7 @@
 #include "semphr.h"
 #include "task.h"
 #include "tof.h"
+#include "vertical_est.h"
 #include <string.h>
 
 #define ESC_ARM_WAIT_MS 3000U
@@ -96,6 +97,19 @@ static SemaphoreHandle_t imu_drdy_semaphore;
    ①任务初始化 ②外层循环重初始化 IMU ③未解锁分支。
    漏掉第 ③ 处会导致解锁瞬间从上一轮的残留值开始爬升。 */
 static float throttle_slew_us = (float)MOTOR_PWM_MIN_US;
+
+/* ── 临时探针：控制环单拍耗时峰值（H4' 验证用，验完连函数一起删）──────────
+   量的是"这一拍自己干了多少活"：从等到 DRDY 起，到本拍最后发布遥测为止。
+   一拍预算约 4008us（250Hz）；一旦逼近这个数，说明开始吃下一拍的 DRDY 了。
+   正常值应该远小于它——估计器只做一次结构体拷贝和几次浮点，理论上增加不到 2us。 */
+static uint32_t motor_test_max_frame_us;
+
+uint32_t MotorTest_TakeMaxFrameUs(void)
+{
+    uint32_t value = motor_test_max_frame_us;
+    motor_test_max_frame_us = 0U;    /* 读走即清零：每次打印看到的是"上次打印以来"的峰值 */
+    return value;
+}
 
 /**
  * @brief IMU 数据就绪中断回调，由 EXTI0 的 HAL_GPIO_EXTI_Callback 调用。
@@ -289,6 +303,7 @@ void MotorTest_Task(void *argument)
     uint32_t next_battery_tick;
     uint32_t imu_cycles;
     uint32_t dt_us;
+    uint32_t frame_us;
     uint32_t blackbox_sample_divider;
     uint32_t i2c_fail_streak;
     float control_dt_s;
@@ -347,6 +362,9 @@ void MotorTest_Task(void *argument)
         IMU_Level_Start(&level_collector, IMU_LEVEL_SAMPLE_COUNT);
         IMU_Attitude_Init(&attitude);
         AttitudeControl_Reset();
+        /* 高度/垂速估计器跟着一起重新起步：IMU 重新初始化后姿态角会跳，
+           让估计器重新采第一个样本更干净。 */
+        VerticalEst_Init();
         bias_ready = false;
         level_ready = false;
         was_armed = false;
@@ -445,6 +463,12 @@ void MotorTest_Task(void *argument)
                测不到时 ToF 内部会保持上一次的值。垂速暂不做，固定 0。 */
             altitude_cm = ToF_GetAltitudeCm();
             vz_cms = 0;
+
+            /* 高度/垂速估计器（H4' 起搬进控制环）：每拍推进一次，只读不写，不接控制。
+               为什么必须在这里而不是 tofTask 里：倾斜补偿要用机体系姿态角，
+               而姿态角只在本任务里算得出来。
+               内部靠 ToF 的 valid_count 判新数据，所以 250Hz 调用与 12Hz 调用参数一致。 */
+            VerticalEst_Update(body.roll_deg, body.pitch_deg, control_dt_s);
 
             if ((int32_t)(osKernelGetTickCount() - next_battery_tick) >= 0)
             {
@@ -552,6 +576,11 @@ void MotorTest_Task(void *argument)
             was_armed = armed;
 
             Radio_PublishFlightState(body.roll_deg, body.pitch_deg, body.yaw_deg, throttle_us, altitude_cm, vz_cms, true, AttitudeControl_IsInnerLoopEnabled(), armed);
+
+            /* 临时探针：本拍耗时（从 imu_cycles 记的"等 DRDY 之后"到这里）。
+               验完连 motor_test_max_frame_us、MotorTest_TakeMaxFrameUs 一起删。 */
+            frame_us = (uint32_t)(DWT->CYCCNT - imu_cycles) / (SystemCoreClock / 1000000U);
+            if (frame_us > motor_test_max_frame_us) motor_test_max_frame_us = frame_us;
         }
     }
 }

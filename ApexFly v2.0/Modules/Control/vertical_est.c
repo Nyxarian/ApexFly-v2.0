@@ -1,15 +1,16 @@
 /**
  * @file vertical_est.c
- * @brief 高度/垂速状态估计（差分版）实现。
+ * @brief 高度/垂速状态估计实现（差分 + 倾斜补偿 + 一阶低通）。
  *
  * ── 它在整条链路里的位置 ──────────────────────────────────────
- *   tofTask（激光，约 12Hz）
- *        │ distance_raw_mm + valid_count
+ *   motor_test.c 控制环（250Hz）
+ *        │ 每拍调 VerticalEst_Update(roll, pitch, dt)
+ *        │     └─ 内部自己去取 ToF 快照（distance_raw_mm + valid_count）
  *        ▼
  *   VerticalEst_Update() ← 本文件，只做估计，不产生控制量
  *        │ height_cm / vz_cms / valid
- *        ▼
- *   将来由定高控制器消费（H9 起），本阶段只打印出来看
+ *        ├─→ 将来由定高控制器消费（H9 起）
+ *        └─→ tofTask 每 500ms 读一次打印（控制环里禁止打印）
  *
  * ── 为什么吃原始值、不吃滤波值 ────────────────────────────────
  * tof.c 里的低通在 12Hz 下时间常数约 330ms。那个滞后对"屏幕上的数字"是好事，
@@ -20,39 +21,49 @@
  * "83ms 前那一个"。若每拍都拿同一个数据去差分，会算出假的 0 速度
  * （分子恒为 0），而且还会把噪声一遍遍平均掉，看起来"很稳"其实是假的。
  *
- * ── 算法（差分 + 一阶低通）────────────────────────────────────
+ * ── 算法 ────────────────────────────────────────────────────
  *   来了新数据且可用：
- *       h_meas = 原始距离 / 10                        （毫米 → 厘米）
- *       vz_raw = (h_meas − h_est) / 距上次有效样本的秒数
- *       vz_est = vz_est + (vz_raw − vz_est) × ALPHA   （一阶低通）
- *       h_est  = h_meas                               （零阶保持，不再加滤波）
+ *       h_meas = 原始距离 ÷ 10 × cos(roll) × cos(pitch)   （毫米 → 厘米，并做倾斜补偿）
+ *       若距上次样本已超过 RESTART_GAP：直接重新起步（h=h_meas、vz=0）
+ *       否则：vz_raw = (h_meas − h_est) ÷ 距上次有效样本的秒数
+ *             vz_est = vz_est + (vz_raw − vz_est) × ALPHA     （一阶低通）
+ *             h_est  = h_meas                                 （零阶保持，不再加滤波）
  *   读数不可用：h_est / vz_est 冻结不动，valid 置 false，不外推。
  *   判"不可用"用的是本模块自己累加的"距上次样本的时间"（超过 0.3 秒），
  *   不是 ToF 的 age_ms —— 单次丢数据不抖，连续丢三四次才判失效。
  *
+ * ── 倾斜补偿的依据 ───────────────────────────────────────────
+ * 镜头顺机身 -Z 轴打出去，机身倾斜时测到的是 d = h / cosθ（偏大），
+ * 乘 cos 就是把它还原成垂直高度。横滚与俯仰各一个 cos。
+ * 量级：歪 20° 偏大 6.4%（30cm 高时差 1.9cm），歪 30° 偏大 15%。
+ * 大角度下横滚与俯仰的耦合项这里忽略——定高本身就要求倾角 < 25°，够用。
+ *
  * ── 已知局限（都记在案，不要以为现在是最终形态）────────────────
- * 1. 差分噪声：原始值峰峰 3~5mm，差分出来约 2cm/s（1σ），低通后约 0.8cm/s。
+ * 1. 差分噪声：原始值峰峰 3~5mm，差分出来约 2cm/s（1σ），低通后约 0.4cm/s。
  *    想再快就必须换"加速度计 + ToF 互补滤波"，那是 H16 的事，不是调参数能解决的。
- * 2. 倾斜没补偿：现在测到的是 d = h/cosθ，机身歪 20° 会偏大 6%（H4 加补偿）。
- * 3. 没有外推能力：数据一丢只能冻结；正确性靠 valid 标志告诉上层。
- * 4. 单上下文：本模块不加锁，H3 阶段只在 tofTask 里调用。
- *    将来搬进控制环时，Update 在控制环、GetState 在别处读，要先确认这一点。
+ * 2. 没有外推能力：数据一丢只能冻结；正确性靠 valid 标志告诉上层。
+ * 3. 一写一读：Update 在控制环、GetState 在 tofTask，结构体拷贝不是原子的。
+ *    打印出来的 h 与 vz 理论上可能来自相邻两拍——对诊断无影响。
  */
 
 #include "vertical_est.h"
 
 #include "tof.h"
+#include <math.h>
 #include <stddef.h>
 
 /* 每拍 dt 的合理性区间，单位秒。
-   正常一步约 20ms（tofTask 的步进周期）。超出这个范围说明任务被长时间抢占，
+   正常控制周期约 4ms。超出这个范围说明任务被长时间抢占，
    累加值已经不可信，按标称值算，避免差分算出离谱的垂速。 */
-#define VERTICAL_EST_DT_MIN_S 0.005f
+#define VERTICAL_EST_DT_MIN_S 0.001f
 #define VERTICAL_EST_DT_MAX_S 0.100f
-#define VERTICAL_EST_DT_NOMINAL_S 0.020f
+#define VERTICAL_EST_DT_NOMINAL_S 0.004f
 
 /* 差分时间分母的下限，单位秒。防止两条数据挨得太近时把噪声放大成巨大垂速。 */
 #define VERTICAL_EST_MEAS_DT_MIN_S 0.020f
+
+/* 度 → 弧度。 */
+#define VERTICAL_EST_DEG_TO_RAD 0.017453292f
 
 static VerticalEstState_t vertical_est;
 
@@ -88,7 +99,7 @@ void VerticalEst_Init(void)
     VerticalEst_Reset();
 }
 
-void VerticalEst_Update(float dt_s)
+void VerticalEst_Update(float roll_deg, float pitch_deg, float dt_s)
 {
     ToFSnapshot_t snap;
     float h_meas_cm;
@@ -103,7 +114,7 @@ void VerticalEst_Update(float dt_s)
     vertical_est_accum_dt_s += dt_s;
     vertical_est_since_sample_s += dt_s;
 
-    /* 只拷贝一个结构体，不碰 I2C 总线，可以在任何任务里调用。 */
+    /* 只拷贝一个结构体，不碰 I2C 总线，也不会阻塞。 */
     ToF_GetSnapshot(&snap);
 
     /* valid_count 变了才是真的来了新数据。见文件头"为什么必须靠 valid_count"。
@@ -115,12 +126,17 @@ void VerticalEst_Update(float dt_s)
 
         if (snap.ready && (snap.distance_raw_mm > 0U))
         {
-            /* H4 的倾斜补偿就加在这一行：h_meas = 距离 × cos(roll) × cos(pitch) / 10。 */
-            h_meas_cm = (float)snap.distance_raw_mm * 0.1f;
+            /* 倾斜补偿就放在这里：只在来新数据时算（约 12Hz），
+               不在每拍的 250Hz 空算两次 cosf。 */
+            h_meas_cm = (float)snap.distance_raw_mm * 0.1f
+                      * cosf(roll_deg * VERTICAL_EST_DEG_TO_RAD)
+                      * cosf(pitch_deg * VERTICAL_EST_DEG_TO_RAD);
 
-            if (!vertical_est_primed)
+            if ((!vertical_est_primed) || (vertical_est_accum_dt_s > VERTICAL_EST_RESTART_GAP_S))
             {
-                /* 第一个有效值直接当起点，垂速记 0，不从 0 厘米往上爬。 */
+                /* 第一次起步，或者数据断了一大段才回来：当全新开始。
+                   绝不拿新读数去减旧高度——那会算出一个巨大的假垂速
+                   （实测 ToF 重初始化后飙到过 +14.9cm/s）。 */
                 vertical_est.height_cm = h_meas_cm;
                 vertical_est.vz_cms = 0.0f;
                 vertical_est_primed = true;
