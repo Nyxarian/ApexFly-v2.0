@@ -6,8 +6,10 @@
  * 限幅语义（#26）：遥控只能设 out_max（MAX_RATE_DPS / MAX_CORRECTION_US）；
  * 积分限幅由 attitude_control.c 按 out_max 的固定比例推导，本文件不再写 i_limit。
  * trim 先存着给 GET/SET 显示，不送进控制目标角。
- * APEX_PID_HOVER_PWM_US 表示满杆油门上限；垂速 PID 项（ID 25~28）只保留读写通道，不参与电机输出。
- * 高度控制器已于 2026-09-11 清除，这四项改为本地 PidTableAltitudeParams_t，等重做定高时再接回去。
+ * APEX_PID_HOVER_PWM_US 这个枚举名是历史遗留：它表示的是【满杆对应的最高油门】，
+ * 不是"悬停需要多少油门"。内部字段已改名成 max_throttle_us，
+ * 只有协议枚举名保留旧写法，免得飞机与遥控两端错位。
+ * 垂速 PID 项（ID 25~28）当前只保留读写通道，不参与电机输出；接入定高后它们就是垂速内环的三增益。
  * MAG_CAL_STOP 成功后由黑匣子把硬铁偏移写入 0x002000；失败不覆盖旧值。
  */
 
@@ -34,27 +36,29 @@
 #define PID_TABLE_CORR_MAX 300.0f
 #define PID_TABLE_TRIM_ABS_MAX 10.0f
 
-/* 高度参数暂存。定高模块已移除（2026-09-11 清理），这四项只作为协议 ID 的读写载体保留，
-   不参与任何控制。重新做定高时再接管：届时把它接回新控制器，协议 ID 25~29 与黑匣子格式不用改。 */
+/* 高度/油门参数组：垂速内环三增益 + 满杆最高油门。
+   定高控制器当前还没接入，这四项只作为协议 ID 的读写载体保留，不参与任何控制。
+   接入定高时直接把它接回新控制器，协议 ID 25~29 与黑匣子格式都不用改。 */
 typedef struct
 {
     float vz_kp;
     float vz_ki;
     float vz_kd;
-    float hover_pwm_us;
+    /* 满杆对应的最高油门，单位微秒。注意：不是"悬停需要多少油门"。 */
+    float max_throttle_us;
 } PidTableAltitudeParams_t;
 
-#define PID_TABLE_ALTITUDE_DEFAULT_VZ_KP       100.0f
-#define PID_TABLE_ALTITUDE_DEFAULT_VZ_KI       0.0f
-#define PID_TABLE_ALTITUDE_DEFAULT_VZ_KD       0.0f
-#define PID_TABLE_ALTITUDE_DEFAULT_HOVER_PWM   1500.0f
+#define PID_TABLE_ALTITUDE_DEFAULT_VZ_KP            100.0f
+#define PID_TABLE_ALTITUDE_DEFAULT_VZ_KI            0.0f
+#define PID_TABLE_ALTITUDE_DEFAULT_VZ_KD            0.0f
+#define PID_TABLE_ALTITUDE_DEFAULT_MAX_THROTTLE_US  1500.0f
 
 static void PidTable_AltitudeResetDefaults(PidTableAltitudeParams_t *altitude)
 {
     altitude->vz_kp = PID_TABLE_ALTITUDE_DEFAULT_VZ_KP;
     altitude->vz_ki = PID_TABLE_ALTITUDE_DEFAULT_VZ_KI;
     altitude->vz_kd = PID_TABLE_ALTITUDE_DEFAULT_VZ_KD;
-    altitude->hover_pwm_us = PID_TABLE_ALTITUDE_DEFAULT_HOVER_PWM;
+    altitude->max_throttle_us = PID_TABLE_ALTITUDE_DEFAULT_MAX_THROTTLE_US;
 }
 
 typedef struct
@@ -120,7 +124,7 @@ static void PidTable_ExportValues(int32_t *values_q10000)
     values_q10000[APEX_PID_VERTICAL_SPEED_KP] = PidTable_FloatToQ10000(pid_table.altitude.vz_kp);
     values_q10000[APEX_PID_VERTICAL_SPEED_KI] = PidTable_FloatToQ10000(pid_table.altitude.vz_ki);
     values_q10000[APEX_PID_VERTICAL_SPEED_KD] = PidTable_FloatToQ10000(pid_table.altitude.vz_kd);
-    values_q10000[APEX_PID_HOVER_PWM_US] = PidTable_FloatToQ10000(pid_table.altitude.hover_pwm_us);
+    values_q10000[APEX_PID_HOVER_PWM_US] = PidTable_FloatToQ10000(pid_table.altitude.max_throttle_us);
 }
 
 static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
@@ -228,7 +232,7 @@ static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
     case APEX_PID_VERTICAL_SPEED_KP: pid_table.altitude.vz_kp = value; break;
     case APEX_PID_VERTICAL_SPEED_KI: pid_table.altitude.vz_ki = value; break;
     case APEX_PID_VERTICAL_SPEED_KD: pid_table.altitude.vz_kd = value; break;
-    case APEX_PID_HOVER_PWM_US: pid_table.altitude.hover_pwm_us = value; break;
+    case APEX_PID_HOVER_PWM_US: pid_table.altitude.max_throttle_us = value; break;
     default:
         return APEX_PID_STATUS_INVALID_PARAMETER;
     }
@@ -286,7 +290,7 @@ uint16_t PidTable_GetMaxThrottleUs(void)
     float max_throttle_us;
 
     taskENTER_CRITICAL();
-    max_throttle_us = pid_table.altitude.hover_pwm_us;
+    max_throttle_us = pid_table.altitude.max_throttle_us;
     taskEXIT_CRITICAL();
     if (max_throttle_us < PID_TABLE_MAX_THROTTLE_MIN_US) max_throttle_us = PID_TABLE_MAX_THROTTLE_MIN_US;
     if (max_throttle_us > PID_TABLE_MAX_THROTTLE_MAX_US) max_throttle_us = PID_TABLE_MAX_THROTTLE_MAX_US;

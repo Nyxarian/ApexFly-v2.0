@@ -152,10 +152,11 @@ typedef struct
     /* 保持 19 列 schema 2 的 armed/connected 字节位置；更早 17 列布局由导出器单独兼容。 */
     uint8_t armed;
     uint8_t connected;
-    /* 磁航向，单位百分之一度。无效 -1。沿用旧目标垂速槽，64 字节布局不变。 */
-    int16_t target_vz_cms;
+    /* 磁航向，单位百分之一度。无效 -1。这一格不是"目标垂速"，旧名是历史遗留。 */
+    int16_t mag_heading_cdeg;
     int16_t vz_correction_us;
-    uint16_t hover_pwm_us;
+    /* 目标垂速，单位厘米每秒，向上为正。原来是"本拍最高油门"，偏移与宽度不变。 */
+    int16_t vz_target_cms;
     uint8_t altitude_state;
     uint8_t pad[7];
     uint16_t crc16;
@@ -829,9 +830,9 @@ static bool Blackbox_WriteSample(const BlackboxSample_t *sample)
     memcpy(record.sample.motor_us, sample->motor_us, sizeof(record.sample.motor_us));
     record.sample.altitude_cm = sample->altitude_cm;
     record.sample.vz_cms = sample->vz_cms;
-    record.sample.target_vz_cms = sample->target_vz_cms;
+    record.sample.mag_heading_cdeg = sample->mag_heading_cdeg;
     record.sample.vz_correction_us = sample->vz_correction_us;
-    record.sample.hover_pwm_us = sample->hover_pwm_us;
+    record.sample.vz_target_cms = sample->vz_target_cms;
     record.sample.altitude_state = sample->altitude_state;
     record.sample.armed = sample->armed;
     record.sample.connected = sample->connected;
@@ -929,16 +930,16 @@ static void Blackbox_PrintPidHeader(uint16_t session_id, uint32_t utc_seconds, c
         }
         (void)Debug_Send((const uint8_t *)line, (uint16_t)length);
     }
-    Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,hover_us,alt_state,armed,conn\r\n");
+    Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,vz_target_cms,alt_state,armed,conn\r\n");
 }
 
 static void Blackbox_PrintSample(const BlackboxFlashRecord_t *record)
 {
     int16_t altitude_cm = 0;
     int16_t vz_cms = 0;
-    int16_t target_vz_cms = 0;
+    int16_t mag_heading_cdeg = 0;
     int16_t vz_correction_us = 0;
-    uint16_t hover_pwm_us = 0U;
+    int16_t vz_target_cms = 0;
     uint8_t altitude_state = 0U;
     uint8_t armed;
     uint8_t connected;
@@ -947,9 +948,9 @@ static void Blackbox_PrintSample(const BlackboxFlashRecord_t *record)
     {
         altitude_cm = record->sample.altitude_cm;
         vz_cms = record->sample.vz_cms;
-        target_vz_cms = record->sample.target_vz_cms;
+        mag_heading_cdeg = record->sample.mag_heading_cdeg;
         vz_correction_us = record->sample.vz_correction_us;
-        hover_pwm_us = record->sample.hover_pwm_us;
+        vz_target_cms = record->sample.vz_target_cms;
         altitude_state = record->sample.altitude_state;
         armed = record->sample.armed;
         connected = record->sample.connected;
@@ -969,7 +970,7 @@ static void Blackbox_PrintSample(const BlackboxFlashRecord_t *record)
         connected = record->bytes[41];
     }
 
-    Debug_Printf("%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%u,%u,%u,%u,%u,%d,%d,%.2f,%d,%u,%u,%u,%u\r\n", (unsigned long)record->sample.t_ms, (double)record->sample.roll_cdeg / 100.0, (double)record->sample.pitch_cdeg / 100.0, (double)record->sample.yaw_cdeg / 100.0, (double)record->sample.roll_rate_cdps / 100.0, (double)record->sample.pitch_rate_cdps / 100.0, (double)record->sample.yaw_rate_cdps / 100.0, (int)record->sample.roll_corr_us, (int)record->sample.pitch_corr_us, (int)record->sample.yaw_corr_us, (unsigned int)record->sample.throttle_us, (unsigned int)record->sample.motor_us[0], (unsigned int)record->sample.motor_us[1], (unsigned int)record->sample.motor_us[2], (unsigned int)record->sample.motor_us[3], (int)altitude_cm, (int)vz_cms, (target_vz_cms < 0) ? -1.0 : ((double)target_vz_cms / 100.0), (int)vz_correction_us, (unsigned int)hover_pwm_us, (unsigned int)altitude_state, (unsigned int)armed, (unsigned int)connected);
+    Debug_Printf("%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%u,%u,%u,%u,%u,%d,%d,%.2f,%d,%d,%u,%u,%u\r\n", (unsigned long)record->sample.t_ms, (double)record->sample.roll_cdeg / 100.0, (double)record->sample.pitch_cdeg / 100.0, (double)record->sample.yaw_cdeg / 100.0, (double)record->sample.roll_rate_cdps / 100.0, (double)record->sample.pitch_rate_cdps / 100.0, (double)record->sample.yaw_rate_cdps / 100.0, (int)record->sample.roll_corr_us, (int)record->sample.pitch_corr_us, (int)record->sample.yaw_corr_us, (unsigned int)record->sample.throttle_us, (unsigned int)record->sample.motor_us[0], (unsigned int)record->sample.motor_us[1], (unsigned int)record->sample.motor_us[2], (unsigned int)record->sample.motor_us[3], (int)altitude_cm, (int)vz_cms, (mag_heading_cdeg < 0) ? -1.0 : ((double)mag_heading_cdeg / 100.0), (int)vz_correction_us, (int)vz_target_cms, (unsigned int)altitude_state, (unsigned int)armed, (unsigned int)connected);
 }
 
 static uint32_t Blackbox_DumpStartAddress(uint32_t max_records)
@@ -1060,7 +1061,7 @@ static void Blackbox_DumpLogs(uint32_t max_records)
                 Blackbox_PrintPidHeader(pending_session_id, record.altitude.utc_seconds, pending_pid_q100);
                 pending_session_header = false;
             }
-            Debug_Printf("# altitude vz_kp=%.2f vz_ki=%.2f vz_kd=%.2f hover_pwm=%.0f utc=%lu\r\n", (double)record.altitude.altitude_q10000[0] / 10000.0, (double)record.altitude.altitude_q10000[1] / 10000.0, (double)record.altitude.altitude_q10000[2] / 10000.0, (double)record.altitude.altitude_q10000[3] / 10000.0, (unsigned long)record.altitude.utc_seconds);
+            Debug_Printf("# altitude vz_kp=%.2f vz_ki=%.2f vz_kd=%.2f max_thr=%.0f utc=%lu\r\n", (double)record.altitude.altitude_q10000[0] / 10000.0, (double)record.altitude.altitude_q10000[1] / 10000.0, (double)record.altitude.altitude_q10000[2] / 10000.0, (double)record.altitude.altitude_q10000[3] / 10000.0, (unsigned long)record.altitude.utc_seconds);
         }
         else if (record.sample.type == BLACKBOX_RECORD_TYPE_SAMPLE)
         {
@@ -1072,7 +1073,7 @@ static void Blackbox_DumpLogs(uint32_t max_records)
             if (!in_session && !printed_orphan_header)
             {
                 Debug_Printf("# session=0 t0_utc=NA unix=0\r\n");
-                Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,hover_us,alt_state,armed,conn\r\n");
+                Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,vz_target_cms,alt_state,armed,conn\r\n");
                 printed_orphan_header = true;
             }
             if (in_session || printed_orphan_header)

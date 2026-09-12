@@ -134,7 +134,9 @@ typedef enum
     APEX_PID_VERTICAL_SPEED_KP,
     APEX_PID_VERTICAL_SPEED_KI,
     APEX_PID_VERTICAL_SPEED_KD,
-    /* 当前表示满杆油门上限，单位微秒，最低油门固定 1000。 */
+    /* 满杆油门上限，单位微秒，最低油门固定 1000。
+       枚举名里的 HOVER 是历史遗留：它不表示"悬停需要多少油门"，
+       飞机端模块内部一律叫 max_throttle_us，改名只为对齐语义，协议数值不变。 */
     APEX_PID_HOVER_PWM_US
 } ApexPidParameterId_t;
 

@@ -21,7 +21,7 @@
  * 气压计模块已于 2026-09-11 清除，高度遥测先固定填 0，不读 I2C2。
  * 将来接入激光测距做定高时，在这里把高度接进来；届时注意本文件的油门速率限制
  * 会与新控制器自带的斜率限制叠加，需要评估是否删掉一层。
- * 解锁后黑匣子样本把磁航向写进 target_vz_cms；电台遥测另填 home_distance_m。
+ * 解锁后黑匣子样本把磁航向写进 mag_heading_cdeg；电台遥测另填 home_distance_m。
  * 偏航杆中位锁磁航向，出死区切速率。横滚俯仰杆映射成目标角，满杆约 ±10°，再加 Trim。YAW ANGLE 为 0 时偏航外环不出力。
  */
 
@@ -531,9 +531,13 @@ void MotorTest_Task(void *argument)
                 sample.motor_us[3] = mixer_output.motor_4_us;
                 sample.altitude_cm = altitude_cm;
                 sample.vz_cms = vz_cms;
-                sample.target_vz_cms = mag_heading_cdeg;
+                sample.mag_heading_cdeg = mag_heading_cdeg;
                 sample.vz_correction_us = 0;
-                sample.hover_pwm_us = PidTable_GetMaxThrottleUs();
+                /* 注意：原来的 sample.hover_pwm_us = PidTable_GetMaxThrottleUs() 已删除。
+                   那一格改记目标垂速（vz_target_cms），定高接入前保持 0；
+                   最高油门的值不受影响，仍写在每场开头的 "# altitude ... max_thr=" 行里。
+                   sample 每拍都有 memset 清零，这里不赋值就是 0。 */
+                sample.vz_target_cms = 0;
                 sample.altitude_state = 0U;
                 sample.armed = 1U;
                 sample.connected = link.connected ? 1U : 0U;

@@ -5,7 +5,9 @@
  * 只有本模块的任务碰 SPI3 / W25Q64。电机任务只 SubmitSample，电台任务只 RequestSave。
  * 不搬老 app_blackbox，不写水平零点。0x002000 给磁力计硬铁校准双备份，不再给六面校准。
  * 日志按 Session 切开，每场开头钉死旧 26 项姿态参数和新增高度参数。
- * 样本里 target_vz_cms 现记磁航向（百分之一度），CSV 列名为 mag_hdg。
+ * 样本里 mag_heading_cdeg 记磁航向（百分之一度），CSV 列名为 mag_hdg。
+ * 样本里 vz_target_cms 记目标垂速（厘米每秒），CSV 列名为 vz_target_cms；
+ * 这一格原来是"本拍最高油门"（每拍重复的常数，无信息量），记录布局与偏移完全没变。
  * 样本仍用相对毫秒；解锁时刻的 UTC 写在高度参数记录里，上锁时刻的 UTC 写在场次尾。
  * 没收到合法 RMC 时这两处都写 0。导出时把 Unix 秒换成北京时间。
  * 日志区写满后从起点覆盖，写指针记在 0x003000；dump [N] 从当前写指针往回取最近 N 条，不是从 Flash 物理末尾取。
@@ -51,17 +53,22 @@ typedef struct
     uint16_t throttle_us;
     /* 四路电机脉宽，单位微秒。 */
     uint16_t motor_us[4];
-    /* 卡尔曼离地高度，单位厘米。 */
+    /* 离地高度，单位厘米。当前由激光测距直接给出，含约 2cm 安装偏置。 */
     int16_t altitude_cm;
-    /* 卡尔曼垂直速度，单位厘米每秒。 */
+    /* 垂直速度，单位厘米每秒，向上为正。 */
     int16_t vz_cms;
-    /* 磁航向，单位百分之一度，0～35999。无效填 -1。字段沿用 target_vz_cms，记录布局不变。 */
-    int16_t target_vz_cms;
-    /* 垂速 PID 对悬停油门的修正，单位微秒。 */
+    /* 磁航向，单位百分之一度，0～35999。无效填 -1。
+       字段名和 CSV 列名 mag_hdg 保持一致。注意这一格不是"目标垂速"，
+       target_vz_cms 那个旧名字是历史遗留，布局与偏移不变。 */
+    int16_t mag_heading_cdeg;
+    /* 垂速环对基准油门的修正，单位微秒。 */
     int16_t vz_correction_us;
-    /* 本拍使用的可调悬停油门，单位微秒。 */
-    uint16_t hover_pwm_us;
-    /* AltitudeControlState_t 的数值，用于判断起飞斜坡和失效保持。 */
+    /* 目标垂直速度，单位厘米每秒，向上为正。
+       这一格原来是"本拍使用的最高油门"（每拍重复的常数，没有信息量），
+       定高接入后改记目标垂速，CSV 列名由 hover_us 改为 vz_target_cms。
+       记录布局（偏移与宽度）完全不变；最高油门的值仍写在每场开头的参数行里。 */
+    int16_t vz_target_cms;
+    /* 高度控制模式：0 手动，1 定高，2 自动起飞，3 自动降落。 */
     uint8_t altitude_state;
     /* 0 上锁，1 解锁。 */
     uint8_t armed;

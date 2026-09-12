@@ -51,12 +51,12 @@ namespace ApexFlyBlackboxReader
             "roll_rate", "pitch_rate", "yaw_rate",
             "roll_corr", "pitch_corr", "yaw_corr",
             "thr", "m1", "m2", "m3", "m4",
-            "alt_cm", "vz_cms", "mag_hdg", "vz_corr_us", "hover_us", "alt_state"
+            "alt_cm", "vz_cms", "mag_hdg", "vz_corr_us", "vz_target_cms", "alt_state"
         };
 
         private static readonly string[] CommandChannels =
         {
-            "thr", "m1", "m2", "m3", "m4", "roll_corr", "pitch_corr", "yaw_corr", "vz_corr_us", "hover_us", "alt_state"
+            "thr", "m1", "m2", "m3", "m4", "roll_corr", "pitch_corr", "yaw_corr", "vz_corr_us", "vz_target_cms", "alt_state"
         };
 
         private static readonly string[] AttitudeChannels =
@@ -89,7 +89,7 @@ namespace ApexFlyBlackboxReader
         {
             return name == "thr" || name == "m1" || name == "m2" || name == "m3" || name == "m4"
                 || name == "roll_corr" || name == "pitch_corr" || name == "yaw_corr"
-                || name == "vz_corr_us" || name == "hover_us" || name == "alt_state";
+                || name == "vz_corr_us" || name == "vz_target_cms" || name == "alt_state";
         }
 
         private void LoadCsv()
@@ -138,14 +138,14 @@ namespace ApexFlyBlackboxReader
                     {
                         AddValue("mag_hdg", parts, offset + 17);
                         AddValue("vz_corr_us", parts, offset + 18);
-                        AddValue("hover_us", parts, offset + 19);
+                        AddValue("vz_target_cms", parts, offset + 19);
                         AddValue("alt_state", parts, offset + 20);
                     }
                     else
                     {
                         series["mag_hdg"].Add(0f);
                         series["vz_corr_us"].Add(0f);
-                        series["hover_us"].Add(0f);
+                        series["vz_target_cms"].Add(0f);
                         series["alt_state"].Add(0f);
                     }
                 }
@@ -217,7 +217,7 @@ namespace ApexFlyBlackboxReader
             colors["vz_cms"] = Color.FromArgb(255, 180, 90);
             colors["mag_hdg"] = Color.FromArgb(120, 255, 150);
             colors["vz_corr_us"] = Color.FromArgb(255, 120, 180);
-            colors["hover_us"] = Color.FromArgb(210, 210, 210);
+            colors["vz_target_cms"] = Color.FromArgb(210, 210, 210);
             colors["alt_state"] = Color.FromArgb(180, 140, 255);
 
             labels["roll"] = "横滚角";
@@ -238,7 +238,7 @@ namespace ApexFlyBlackboxReader
             labels["vz_cms"] = "实际垂速";
             labels["mag_hdg"] = "磁航向";
             labels["vz_corr_us"] = "垂速修正";
-            labels["hover_us"] = "悬停PWM";
+            labels["vz_target_cms"] = "目标垂速";
             labels["alt_state"] = "高度状态";
 
             Panel top = new Panel();

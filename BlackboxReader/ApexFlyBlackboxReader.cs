@@ -58,7 +58,7 @@ namespace ApexFlyBlackboxReader
             "yaw_max_rate_dps", "yaw_max_corr_us",
             "roll_trim_deg", "pitch_trim_deg",
             "yaw_angle_kp", "yaw_angle_ki", "yaw_angle_kd",
-            "vertical_speed_kp", "vertical_speed_ki", "vertical_speed_kd", "hover_pwm_us"
+            "vertical_speed_kp", "vertical_speed_ki", "vertical_speed_kd", "max_throttle_us"
         };
 
         private SerialPort serialPort;
@@ -370,7 +370,7 @@ namespace ApexFlyBlackboxReader
             else
             {
                 allDataWriter = new StreamWriter(Path.Combine(currentExportDirectory, "blackbox_data.csv"), false, utf8, 65536);
-                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,hover_us,alt_state,armed,conn");
+                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,vz_target_cms,alt_state,armed,conn");
             }
             captureActive = true;
             dumpStarted = false;
@@ -634,7 +634,7 @@ namespace ApexFlyBlackboxReader
             {
                 if (currentSession != null)
                 {
-                    foreach (Match pair in pidPairRegex.Matches(line.Replace("vz_kp", "26").Replace("vz_ki", "27").Replace("vz_kd", "28").Replace("hover_pwm", "29")))
+                    foreach (Match pair in pidPairRegex.Matches(line.Replace("vz_kp", "26").Replace("vz_ki", "27").Replace("vz_kd", "28").Replace("hover_pwm", "29").Replace("max_thr", "29")))
                     {
                         int id = (int)ParseLong(pair.Groups[1].Value);
                         if (id >= 26 && id < currentSession.Pid.Length) currentSession.Pid[id] = pair.Groups[2].Value;
@@ -712,7 +712,7 @@ namespace ApexFlyBlackboxReader
             string stem = Path.Combine(currentExportDirectory, "session_" + session.SessionId.ToString("000", CultureInfo.InvariantCulture));
             StreamWriter csv = new StreamWriter(stem + ".csv", false, utf8, 32768);
             csv.WriteLine("# session=" + session.SessionId.ToString(CultureInfo.InvariantCulture) + " t0_utc=" + session.T0Utc);
-            csv.WriteLine("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,hover_us,alt_state,armed,conn");
+            csv.WriteLine("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,vz_target_cms,alt_state,armed,conn");
             sessionCsvWriters[session.SessionId] = csv;
             StreamWriter vofa = new StreamWriter(stem + ".vofa.csv", false, utf8, 32768);
             sessionVofaWriters[session.SessionId] = vofa;
@@ -936,7 +936,7 @@ namespace ApexFlyBlackboxReader
                     }
                     else if (line.StartsWith("# altitude", StringComparison.Ordinal))
                     {
-                        string altitudeLine = line.Replace("vz_kp", "26").Replace("vz_ki", "27").Replace("vz_kd", "28").Replace("hover_pwm", "29");
+                        string altitudeLine = line.Replace("vz_kp", "26").Replace("vz_ki", "27").Replace("vz_kd", "28").Replace("hover_pwm", "29").Replace("max_thr", "29");
                         foreach (Match pair in pidPairRegex.Matches(altitudeLine))
                         {
                             int id = 0;
@@ -1022,7 +1022,7 @@ namespace ApexFlyBlackboxReader
             else
             {
                 allDataWriter = new StreamWriter(Path.Combine(currentExportDirectory, "blackbox_data.csv"), false, utf8, 65536);
-                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,hover_us,alt_state,armed,conn");
+                allDataWriter.WriteLine("session,t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,vz_target_cms,alt_state,armed,conn");
             }
             captureActive = true;
             dumpStarted = true;
