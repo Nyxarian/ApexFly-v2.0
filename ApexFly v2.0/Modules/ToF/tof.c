@@ -6,9 +6,14 @@
  * 2026-09-11 实测：本芯片的连续模式写入成功但不再产生新结果；
  * 单次模式每次都能正常完成。因此这里改成"触发一次 → 等完成 → 读结果 → 再触发"。
  *
- * ── 节奏 ──────────────────────────────────────────────────
- * 每 20ms 走一步，一次测量占 3 步（触发 / 等 2 拍 / 读），
- * 约合 16Hz 一轮完整测量。比 20ms 的时间预算宽裕得多，不会追不上。
+ * ── 节奏（2026-09-11 实测更正）────────────────────────────────
+ * 每 20ms 走一步。一次完整测量占【4 步】：
+ *     第1步 触发 → 第2步 等1拍 → 第3步 等2拍(转READ) → 第4步 读结果
+ * 一轮约 83ms，即【约 12Hz】（串口 n= 每 500ms 增加 6）。
+ * ⚠️ 这里原来写的是"3 步 / 约 16Hz"，是数错了步数，已按实测更正。
+ * 结果读到手的时刻是触发后约 62ms，而测量本身 20ms 就完成了，
+ * 也就是数据到手时已经放了约 42ms。这个 42ms 才是控制通道的滞后
+ * （低通那 330ms 只影响显示/遥测，因为估计器吃的是 raw 值）。
  *
  * ── 失败处理 ───────────────────────────────────────────────
  * 测不到时保持上一次的读数，只把 fresh 置 false 并累加 age，
@@ -40,16 +45,23 @@
 
 /* 步进周期。 */
 #define TOF_STEP_MS 20U
-/* 触发后等几拍再读结果（2 拍 = 40ms > 20ms 时间预算，留足余量）。 */
+/* 触发后等几拍再读结果（2 拍 = 40ms > 20ms 时间预算，留足余量）。
+   ⚠️ 曾经评估过把它改成 1 拍来提速（一轮 4 步 → 3 步，12Hz → 约 16.7Hz），
+   结论是【不做】：控制通道只吃约 42ms 的读取延迟、不吃低通的 330ms，
+   省下 20ms 在互补滤波的交叉频率上只相当于约 0.6° 相位；
+   而采样变快会让"相邻两拍差分求垂速"的噪声变大 34%，对 H3 是反作用。
+   详见 优化一下/高度接入飞控方案.md 第 13.6 节。 */
 #define TOF_WAIT_STEPS 2U
 /* 串口打印周期，单位毫秒。250Hz 的调用方，绝不能每拍都打。 */
 #define TOF_PRINT_PERIOD_MS 500U
-/* 连续多少轮拿不到有效数据才重新初始化（约 1.6 秒）。 */
+/* 连续多少轮拿不到有效数据才重新初始化（约 0.83 秒，12Hz × 10 轮）。 */
 #define TOF_MISS_REINIT 10U
 
 /* 距离低通滤波：filtered += (raw - filtered) / ALPHA_SHIFT。
-   实测原始抖动约 7mm 峰峰；α=1/4 时噪声约降到 1/2，
-   时间常数约 4 拍（80ms）—— 对高度这种慢变量完全够，手举高不会觉得迟滞。
+   2026-09-11 实测（飞机静置）：原始值的峰峰值多在 3~5mm（个别到 8~10mm），
+   滤波后峰峰值多在 0~1mm（最大 2mm），约 3~4 倍降噪。
+   时间常数约 4 拍 = 4 / 12Hz ≈ 330ms。
+   ⚠️ 这个滞后只影响显示/遥测；状态估计器吃的是 distance_raw_mm，不走这个滤波。
    取 2 的幂是为了用移位代替除法，避免在嵌入式里做浮点或整数除法。 */
 #define TOF_LPF_ALPHA_SHIFT 2U
 
@@ -165,8 +177,16 @@ void ToF_Task(void *argument)
 
                 if (result.valid)
                 {
-                    /* 有效新数据：先过低通滤波，再刷新距离，清零失败计数。
-                       差值要用有符号算，否则距离变小时无符号下溢，滤波值会直接跳到天上。 */
+                    /* ⭐ 顺序要求，不要打乱：
+                       ① 先把原始距离写进快照；
+                       ② 再更新低通滤波器；
+                       ③ 最后才自增 valid_count。
+                       上层靠 valid_count 判断"有没有新数据"，按这个顺序写，
+                       只要计数器变了，distance_raw_mm 必然已经是这一条新数据，
+                       不会出现"计数器是新的、距离还是旧的"这种错配。 */
+                    tof_snapshot.distance_raw_mm = result.distance_mm;
+
+                    /* 差值要用有符号算，否则距离变小时无符号下溢，滤波值会直接跳到天上。 */
                     if (!tof_distance_filter_primed)
                     {
                         /* 第一个读数直接作为滤波初值，不让滤波器从 0 慢慢爬。 */
@@ -180,12 +200,18 @@ void ToF_Task(void *argument)
                                                     + (diff_q2 >> TOF_LPF_ALPHA_SHIFT));
                     }
                     /* 1/4 毫米还原成毫米，四舍五入。 */
-                    tof_snapshot.distance_mm = (uint16_t)((tof_distance_filtered_q2 + 2U) >> 2);
-                    /* 直接换算成厘米输出，不减任何零点：镜头装在机身底部，
+                    tof_snapshot.distance_filtered_mm = (uint16_t)((tof_distance_filtered_q2 + 2U) >> 2);
+
+                    /* 高度仍然由【滤波值】换算，所以显示与遥测和 H2 之前完全一致。
+                       直接换算成厘米，不减任何零点：镜头装在机身底部，
                        实测值里就含着约 2cm 的安装偏置，当作固定读数保留。
                        毫米 → 厘米四舍五入，直接整除会把 19mm 砍成 1cm。
                        距离是物理量，不可能为负，所以不需要负值分支。 */
-                    tof_snapshot.altitude_cm = (int32_t)(((uint32_t)tof_snapshot.distance_mm + 5U) / 10U);
+                    tof_snapshot.altitude_cm = (int32_t)(((uint32_t)tof_snapshot.distance_filtered_mm + 5U) / 10U);
+
+                    /* 最后自增计数器，见本分支开头的顺序要求。 */
+                    tof_snapshot.valid_count++;
+
                     tof_snapshot.fresh = true;
                     tof_snapshot.miss_streak = 0U;
                     last_fresh_tick = osKernelGetTickCount();
@@ -228,10 +254,12 @@ void ToF_Task(void *argument)
         if ((int32_t)(osKernelGetTickCount() - next_print_tick) >= 0)
         {
             next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
-            Debug_Printf("[TOF] d=%umm alt=%ldcm status=%u fresh=%u age=%lums err=%lu\r\n",
-                         (unsigned)tof_snapshot.distance_mm,
+            Debug_Printf("[TOF] raw=%umm filt=%umm alt=%ldcm status=%u n=%lu fresh=%u age=%lums err=%lu\r\n",
+                         (unsigned)tof_snapshot.distance_raw_mm,
+                         (unsigned)tof_snapshot.distance_filtered_mm,
                          (long)tof_snapshot.altitude_cm,
                          (unsigned)tof_snapshot.range_status,
+                         (unsigned long)tof_snapshot.valid_count,
                          tof_snapshot.fresh ? 1U : 0U,
                          (unsigned long)tof_snapshot.age_ms,
                          (unsigned long)tof_snapshot.error_count);
