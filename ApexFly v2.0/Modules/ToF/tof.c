@@ -42,6 +42,7 @@
 #include "i2c.h"
 #include "motor_test.h"
 #include "task.h"
+#include "vertical_control.h"
 #include "vertical_est.h"
 #include "vl53l1x.h"
 
@@ -262,9 +263,11 @@ void ToF_Task(void *argument)
         if ((int32_t)(osKernelGetTickCount() - next_print_tick) >= 0)
         {
             VerticalEstState_t vertical_state;
+            VerticalControlSnapshot_t vertical_control_state;
 
             next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
             VerticalEst_GetState(&vertical_state);
+            VerticalControl_GetSnapshot(&vertical_control_state);
             Debug_Printf("[TOF] raw=%umm filt=%umm alt=%ldcm status=%u n=%lu fresh=%u age=%lums err=%lu | h=%.1fcm vz=%+.1fcm/s v=%u sc=%lu | loop=%luus\r\n",
                          (unsigned)tof_snapshot.distance_raw_mm,
                          (unsigned)tof_snapshot.distance_filtered_mm,
@@ -279,6 +282,25 @@ void ToF_Task(void *argument)
                          vertical_state.valid ? 1U : 0U,
                          (unsigned long)vertical_state.sample_count,
                          (unsigned long)MotorTest_TakeMaxFrameUs());
+            /* 定高的模式 / 门禁 / 停手（H6）。单独一行，不并进 [TOF]：
+               两行加起来会顶到 384 字节的格式化缓冲区上限。
+               req=遥控请求  mode=实际模式  st=细分状态
+               sw/ct=两层门禁位图（全通分别是 0xF）  gnd=停手
+               stick=油门杆  rate=杆给的目标变化率  h_sp=目标高度
+               gt=停手进入计时（到 500 就进停手） */
+            Debug_Printf("[ALT] req=%u mode=%u st=%u sw=0x%X ct=0x%X gnd=%u stick=%u rate=%+.1f h_sp=%.1f h=%.1f v=%u gt=%lums\r\n",
+                         (unsigned)vertical_control_state.requested_mode,
+                         (unsigned)vertical_control_state.mode,
+                         (unsigned)vertical_control_state.state,
+                         (unsigned)vertical_control_state.switch_gates,
+                         (unsigned)vertical_control_state.control_gates,
+                         vertical_control_state.grounded ? 1U : 0U,
+                         (unsigned)vertical_control_state.stick,
+                         (double)vertical_control_state.stick_rate_cms,
+                         (double)vertical_control_state.h_sp_cm,
+                         (double)vertical_control_state.h_est_cm,
+                         vertical_control_state.est_valid ? 1U : 0U,
+                         (unsigned long)vertical_control_state.ground_timer_ms);
         }
 
         /* 每步都让出 CPU：本任务与 magtask 共用 I2C2。 */

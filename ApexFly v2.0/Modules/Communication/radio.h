@@ -41,6 +41,10 @@ typedef struct
     bool motor_ready;
     /* true 表示当前已解锁。 */
     bool armed;
+    /* 实际生效的飞行模式，取 VerticalControlMode_t 的值；bit7 置位表示
+       "遥控请求被拒绝或已自动退出"。注意是**实际生效**而不是遥控请求的那个：
+       定高因故障自动退出时，遥控器上要立刻看到模式变回去，飞行员才有明确反馈。 */
+    uint8_t flight_mode;
 } RadioFlightStateSnapshot_t;
 
 /**
@@ -63,6 +67,17 @@ bool Radio_GetFlightStateSnapshot(RadioFlightStateSnapshot_t *state);
  * @param armed 遥控已请求解锁且链路未失联。
  */
 void Radio_PublishFlightState(float roll_deg, float pitch_deg, float yaw_deg, uint16_t throttle_pwm_us, int32_t altitude_cm, int16_t vertical_speed_cms, bool imu_ready, bool motor_ready, bool armed);
+
+/**
+ * @brief 电机任务把**实际生效**的飞行模式交给电台，用来填遥测的 flight_mode 字段。
+ *
+ * 与 Radio_PublishFlightState() 分开单独发布，是为了不改动那 5 处既有调用点。
+ * 协议里这个字节原本是把遥控请求原样回显，改成回显实际模式之后，
+ * "我按了但飞机没照做"这件事才在遥控器上看得见。
+ *
+ * @param flight_mode 实际模式；bit7 置位表示请求被拒绝或已自动退回普通模式。
+ */
+void Radio_PublishFlightMode(uint8_t flight_mode);
 
 /**
  * @brief 电台任务入口。绑定 SPI1 后连续接收，失败则间隔重试。

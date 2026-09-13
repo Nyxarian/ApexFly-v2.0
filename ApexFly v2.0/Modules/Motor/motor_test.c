@@ -46,6 +46,7 @@
 #include "semphr.h"
 #include "task.h"
 #include "tof.h"
+#include "vertical_control.h"
 #include "vertical_est.h"
 #include <string.h>
 
@@ -292,6 +293,7 @@ void MotorTest_Task(void *argument)
     static MixerOutput_t mixer_output;
     static ControlLinkSnapshot_t link;
     static BlackboxSample_t sample;
+    static VerticalControlSnapshot_t vertical_control_state;
     MPU6050_Status_t status;
     bool bias_ready;
     bool level_ready;
@@ -365,6 +367,8 @@ void MotorTest_Task(void *argument)
         /* 高度/垂速估计器跟着一起重新起步：IMU 重新初始化后姿态角会跳，
            让估计器重新采第一个样本更干净。 */
         VerticalEst_Init();
+        /* 定高的模式状态机也跟着冷复位：模式回普通、h_sp 归零、停手计时清零。 */
+        VerticalControl_Init();
         bias_ready = false;
         level_ready = false;
         was_armed = false;
@@ -485,6 +489,16 @@ void MotorTest_Task(void *argument)
                 armed = false;
             }
 
+            /* 定高：模式状态机 + 两层门禁 + 三段映射 + 停手（H6 起）。
+               ⚠️ 位置有两个硬要求，动之前先看清楚：
+               ① 必须在 `if (!armed)` **之前** —— 模式切换的前置条件就是"已上锁"，
+                  塞进解锁分支里，上锁时就永远切不进模式；
+               ② 必须在 `VerticalEst_Update()` **之后** —— 它内部要读估计器的最新结果。
+               link_ok 单独传：失联时 armed 也会变成 false，不区分的话会把
+               "空中失联"误判成"在地面上"。 */
+            VerticalControl_Update(link.command.flight_mode, link.command.throttle, (link.connected && link.command_valid), armed, body.roll_deg, body.pitch_deg, control_dt_s);
+            VerticalControl_GetSnapshot(&vertical_control_state);
+
             if (!armed)
             {
                 throttle_us = MOTOR_PWM_MIN_US;
@@ -562,7 +576,9 @@ void MotorTest_Task(void *argument)
                    最高油门的值不受影响，仍写在每场开头的 "# altitude ... max_thr=" 行里。
                    sample 每拍都有 memset 清零，这里不赋值就是 0。 */
                 sample.vz_target_cms = 0;
-                sample.altitude_state = 0U;
+                /* 高度控制的细分状态（0 普通 / 1 定高在干活 / 4 停手 / 5 已进模式未使能）。
+                   本环节修正量恒 0，这一列是唯一能看出"门禁和停手到底怎么走的"记录点。 */
+                sample.altitude_state = vertical_control_state.state;
                 sample.armed = 1U;
                 sample.connected = link.connected ? 1U : 0U;
                 /* 记录分频：250Hz 全记约 8.3 分钟/场次，分频 2 可翻倍到约 16 分钟。 */
@@ -576,6 +592,9 @@ void MotorTest_Task(void *argument)
             was_armed = armed;
 
             Radio_PublishFlightState(body.roll_deg, body.pitch_deg, body.yaw_deg, throttle_us, altitude_cm, vz_cms, true, AttitudeControl_IsInnerLoopEnabled(), armed);
+            /* 遥测回显**实际生效**的模式，不是遥控请求的模式：
+               定高因为故障自动退出时，遥控器上要立刻看到模式变回去，飞行员才有明确反馈。 */
+            Radio_PublishFlightMode(vertical_control_state.telemetry_mode);
 
             /* 临时探针：本拍耗时（从 imu_cycles 记的"等 DRDY 之后"到这里）。
                验完连 motor_test_max_frame_us、MotorTest_TakeMaxFrameUs 一起删。 */

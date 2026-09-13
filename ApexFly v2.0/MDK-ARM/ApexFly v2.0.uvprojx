@@ -802,6 +802,16 @@
               <FileType>5</FileType>
               <FilePath>..\Modules\Control\vertical_est.h</FilePath>
             </File>
+            <File>
+              <FileName>vertical_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Modules\Control\vertical_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>vertical_control.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Modules\Control\vertical_control.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

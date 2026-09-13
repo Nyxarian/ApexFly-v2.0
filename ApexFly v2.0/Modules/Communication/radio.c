@@ -97,6 +97,13 @@ void Radio_PublishFlightState(float roll_deg, float pitch_deg, float yaw_deg, ui
     taskEXIT_CRITICAL();
 }
 
+void Radio_PublishFlightMode(uint8_t flight_mode)
+{
+    taskENTER_CRITICAL();
+    radio_flight_state.flight_mode = flight_mode;
+    taskEXIT_CRITICAL();
+}
+
 static RA01SC_Status_t Radio_Initialize(void)
 {
     RA01SC_Status_t status;
@@ -114,7 +121,10 @@ static RA01SC_Status_t Radio_Initialize(void)
     return status;
 }
 
-static RA01SC_Status_t Radio_SendTelemetry(uint16_t sequence, uint8_t flight_mode)
+/* 原来这里收的是"刚收到那一帧里的 flight_mode"，也就是把遥控的**请求**原样抄回去；
+   现在改成用电机任务发布的**实际**模式（见 Radio_PublishFlightMode），
+   否则定高自动退出、请求被门禁拒绝这些情况在遥控器上完全看不出来。 */
+static RA01SC_Status_t Radio_SendTelemetry(uint16_t sequence)
 {
     ApexTelemetry_t telemetry;
     ApexProtocolStatus_t protocol_status;
@@ -136,7 +146,7 @@ static RA01SC_Status_t Radio_SendTelemetry(uint16_t sequence, uint8_t flight_mod
     telemetry.altitude_cm = flight_state.altitude_cm;
     telemetry.vertical_speed_cms = flight_state.vertical_speed_cms;
     telemetry.battery_mv = Battery_GetMillivolts();
-    telemetry.flight_mode = flight_mode;
+    telemetry.flight_mode = flight_state.flight_mode;
     if (flight_state.armed) telemetry.flags |= APEX_TELEMETRY_FLAG_ARMED;
     if (flight_state.imu_ready) telemetry.flags |= APEX_TELEMETRY_FLAG_IMU_READY;
     if (flight_state.motor_ready) telemetry.flags |= APEX_TELEMETRY_FLAG_MOTOR_READY;
@@ -237,7 +247,7 @@ static RA01SC_Status_t Radio_ProcessReceivedPacket(bool *tx_in_progress)
         return RA01SC_StartReceive(&radio_device);
     }
 
-    radio_status = Radio_SendTelemetry(command.sequence, command.flight_mode);
+    radio_status = Radio_SendTelemetry(command.sequence);
     if (radio_status != RA01SC_STATUS_OK) return radio_status;
     *tx_in_progress = true;
     return RA01SC_STATUS_OK;
