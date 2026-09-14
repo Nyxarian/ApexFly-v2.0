@@ -1247,9 +1247,13 @@ static void Blackbox_HandleCommandLine(void)
     /* ⚠️【临时，H6 验证完删除】整段 VM 分支都要删掉，包括下面 HELP 里的提示文字。
        为什么要它：遥控端 flight_mode 现在硬编码 1，台架上没法在 0 与 1 之间来回切，
        而"请求被拒"和"请求被接受"两种情况都要验。
-       用法：vm 0 = 强制请求普通，vm 1 = 强制请求定高，vm off = 取消覆盖、跟遥控走。 */
-    else if (Blackbox_MatchToken(&cursor, "VM"))
+       用法：vm 0 = 强制请求普通，vm 1 = 强制请求定高，vm off = 取消覆盖、跟遥控走。
+       这里不用 Blackbox_MatchToken：它要求 "VM" 后面跟空格或行尾，
+       而手输时很容易打成 "vm0"（实测就打成过两次），所以自己按字符判。 */
+    else if ((strncmp(cursor, "VM", 2U) == 0) && ((cursor[2] == '\0') || (cursor[2] == ' ') || (cursor[2] == '0') || (cursor[2] == '1')))
     {
+        cursor += 2;
+        while (*cursor == ' ') cursor++;
         if (Blackbox_MatchToken(&cursor, "OFF"))
         {
             VerticalControl_SetDebugRequestedMode(0xFFU);

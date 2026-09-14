@@ -270,8 +270,13 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
             if (vertical_snapshot.ground_timer_ms >= VERTICAL_GROUND_ENTER_HOLD_MS)
             {
                 vertical_snapshot.grounded = true;
-                /* 进停手时把设定值对齐到当前高度：将来解除停手的瞬间不该有跳变。 */
-                vertical_snapshot.h_sp_cm = vertical_snapshot.h_est_cm;
+                /* 进停手时把设定值归零（下限），**不是**对齐到当前高度。
+                   为什么不能对齐到 h_est：地面读数是"镜头到地面的距离"，本来就不小
+                   （不垫高约 1cm，垫高约 4cm），而对齐出来的 h_sp 只要超过退出门槛 4cm，
+                   下一拍就会立刻满足"退出"条件 → 进入/退出来回抖。
+                   归零之后这个边角彻底消失，而且退出的无扰性不受影响：
+                   退出时 h_sp≈4cm、h_est≈地面读数，外环误差仍然接近 0。 */
+                vertical_snapshot.h_sp_cm = VERTICAL_H_SP_MIN_CM;
             }
         }
         else
