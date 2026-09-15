@@ -23,11 +23,20 @@
 #include <stddef.h>
 #include <string.h>
 
-#define PID_TABLE_PARAMETER_VERSION 2U
+/* 参数集版本号，随 PID 回包发给遥控器（遥控端当前不判它，仅作记录/排障线索）。
+   ⚠️ 2026-09-15 由 2 抬到 3：参数个数 30 → 33（新增高度环三项），
+      抬上去之后回包里就能看出"这一版参数表是哪一代"。 */
+#define PID_TABLE_PARAMETER_VERSION 3U
 #define PID_TABLE_GAIN_MAX 50.0f
 #define PID_TABLE_VZ_KP_MAX 500.0f
 #define PID_TABLE_VZ_KI_MAX 100.0f
 #define PID_TABLE_VZ_KD_MAX 50.0f
+/* 高度环（外环）三增益量程。外环输入是高度误差（cm）、输出是目标垂速（cm/s），
+   所以它的数量级比垂速环小得多（方案 §3.3 定的 Kp_h = 0.6），量程也按此收紧：
+   给 5 / 2 / 5 已经足够宽，同时让"手滑多按一位"更容易被 OUT_OF_RANGE 挡住。 */
+#define PID_TABLE_H_KP_MAX 5.0f
+#define PID_TABLE_H_KI_MAX 2.0f
+#define PID_TABLE_H_KD_MAX 5.0f
 #define PID_TABLE_MAX_THROTTLE_MIN_US 1200.0f
 #define PID_TABLE_MAX_THROTTLE_MAX_US 2000.0f
 #define PID_TABLE_RATE_MIN 20.0f
@@ -36,14 +45,21 @@
 #define PID_TABLE_CORR_MAX 300.0f
 #define PID_TABLE_TRIM_ABS_MAX 10.0f
 
-/* 高度/油门参数组：垂速内环三增益 + 满杆最高油门。
-   定高控制器当前还没接入，这四项只作为协议 ID 的读写载体保留，不参与任何控制。
-   接入定高时直接把它接回新控制器，协议 ID 25~29 与黑匣子格式都不用改。 */
+/* 高度轴参数组：**两个环** + 满杆最高油门。
+   ⚠️⚠️ 两个环不要混（这是 2026-09-15 加外环时特意分开命名的原因）：
+       vz_*  = **垂速环（内环）**：输入垂速误差 cm/s → 输出油门修正量 µs。H9 已接入。
+       h_*   = **高度环（外环）**：输入高度误差 cm   → 输出目标垂速 cm/s。H13 才接入。
+   在 H13 之前 h_* 只是"协议 / 遥控可读写、可存 Flash、可进黑匣子"的参数，
+   **不参与任何控制** ⇒ 现在改它们不影响飞行，也不会被任何代码读到。
+   满杆油门 max_throttle_us 不属于任何一个环，它是两个模式共用的油门上界。 */
 typedef struct
 {
     float vz_kp;
     float vz_ki;
     float vz_kd;
+    float h_kp;
+    float h_ki;
+    float h_kd;
     /* 满杆对应的最高油门，单位微秒。注意：不是"悬停需要多少油门"。 */
     float max_throttle_us;
 } PidTableAltitudeParams_t;
@@ -51,6 +67,12 @@ typedef struct
 #define PID_TABLE_ALTITUDE_DEFAULT_VZ_KP            100.0f
 #define PID_TABLE_ALTITUDE_DEFAULT_VZ_KI            0.0f
 #define PID_TABLE_ALTITUDE_DEFAULT_VZ_KD            0.0f
+/* 外环 Kp 默认取方案 §3.3 已经定下的 0.6，而不是 0：
+   0 的含义是"外环关闭"，会让 H13 接上之后忘记设参的飞机只靠内环阻尼、
+   以一个恒定速度缓慢下沉。给设计值更不容易漏。KI/KD 默认 0（方案里外环就是 P）。 */
+#define PID_TABLE_ALTITUDE_DEFAULT_H_KP             0.6f
+#define PID_TABLE_ALTITUDE_DEFAULT_H_KI             0.0f
+#define PID_TABLE_ALTITUDE_DEFAULT_H_KD             0.0f
 #define PID_TABLE_ALTITUDE_DEFAULT_MAX_THROTTLE_US  1500.0f
 
 static void PidTable_AltitudeResetDefaults(PidTableAltitudeParams_t *altitude)
@@ -58,6 +80,9 @@ static void PidTable_AltitudeResetDefaults(PidTableAltitudeParams_t *altitude)
     altitude->vz_kp = PID_TABLE_ALTITUDE_DEFAULT_VZ_KP;
     altitude->vz_ki = PID_TABLE_ALTITUDE_DEFAULT_VZ_KI;
     altitude->vz_kd = PID_TABLE_ALTITUDE_DEFAULT_VZ_KD;
+    altitude->h_kp = PID_TABLE_ALTITUDE_DEFAULT_H_KP;
+    altitude->h_ki = PID_TABLE_ALTITUDE_DEFAULT_H_KI;
+    altitude->h_kd = PID_TABLE_ALTITUDE_DEFAULT_H_KD;
     altitude->max_throttle_us = PID_TABLE_ALTITUDE_DEFAULT_MAX_THROTTLE_US;
 }
 
@@ -125,6 +150,10 @@ static void PidTable_ExportValues(int32_t *values_q10000)
     values_q10000[APEX_PID_VERTICAL_SPEED_KI] = PidTable_FloatToQ10000(pid_table.altitude.vz_ki);
     values_q10000[APEX_PID_VERTICAL_SPEED_KD] = PidTable_FloatToQ10000(pid_table.altitude.vz_kd);
     values_q10000[APEX_PID_HOVER_PWM_US] = PidTable_FloatToQ10000(pid_table.altitude.max_throttle_us);
+    /* 高度环（外环）。必须写在最后：追加在旧编号之后，旧 30 项的位置一个都不动。 */
+    values_q10000[APEX_PID_HEIGHT_KP] = PidTable_FloatToQ10000(pid_table.altitude.h_kp);
+    values_q10000[APEX_PID_HEIGHT_KI] = PidTable_FloatToQ10000(pid_table.altitude.h_ki);
+    values_q10000[APEX_PID_HEIGHT_KD] = PidTable_FloatToQ10000(pid_table.altitude.h_kd);
 }
 
 static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
@@ -178,6 +207,15 @@ static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
         break;
     case APEX_PID_HOVER_PWM_US:
         if ((value < PID_TABLE_MAX_THROTTLE_MIN_US) || (value > PID_TABLE_MAX_THROTTLE_MAX_US)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_HEIGHT_KP:
+        if ((value < 0.0f) || (value > PID_TABLE_H_KP_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_HEIGHT_KI:
+        if ((value < 0.0f) || (value > PID_TABLE_H_KI_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_HEIGHT_KD:
+        if ((value < 0.0f) || (value > PID_TABLE_H_KD_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
         break;
     default:
         return APEX_PID_STATUS_INVALID_PARAMETER;
@@ -233,6 +271,9 @@ static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
     case APEX_PID_VERTICAL_SPEED_KI: pid_table.altitude.vz_ki = value; break;
     case APEX_PID_VERTICAL_SPEED_KD: pid_table.altitude.vz_kd = value; break;
     case APEX_PID_HOVER_PWM_US: pid_table.altitude.max_throttle_us = value; break;
+    case APEX_PID_HEIGHT_KP: pid_table.altitude.h_kp = value; break;
+    case APEX_PID_HEIGHT_KI: pid_table.altitude.h_ki = value; break;
+    case APEX_PID_HEIGHT_KD: pid_table.altitude.h_kd = value; break;
     default:
         return APEX_PID_STATUS_INVALID_PARAMETER;
     }

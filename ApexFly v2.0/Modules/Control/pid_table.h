@@ -58,7 +58,11 @@ bool PidTable_ImportSnapshot(const int32_t *values_q10000);
 uint16_t PidTable_GetMaxThrottleUs(void);
 
 /**
- * @brief 读取定高垂速内环的三个增益（协议 ID 25~27）。
+ * @brief 读取定高**垂速环（内环）**的三个增益（协议 ID 25~27）。
+ *
+ * ⚠️ 这是**内环**。高度轴的**外环**（高度误差 → 目标垂速）是另一组，
+ *    ID 30~32，要到 H13 才会被控制代码读取，届时在这里补一个对应的
+ *    `PidTable_GetHeightParams()`（现在不提前加：没有调用方的接口就是死代码）。
  *
  * 这三项在 H9 之前只作为协议 ID 的读写载体存在、不参与任何控制；
  * H9 把垂速内环接上之后它们才真正生效。**本函数只提供读，不写 PID**——

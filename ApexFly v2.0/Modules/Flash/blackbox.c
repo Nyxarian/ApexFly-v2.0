@@ -54,8 +54,15 @@
 #define BLACKBOX_LOG_INDEX_RECORD_SIZE 32U
 
 #define BLACKBOX_PARAMETER_MAGIC 0x50445032UL /* "PDP2"，与老工程 magic 区分。 */
-#define BLACKBOX_PARAMETER_SCHEMA 2U
+/* Flash 参数表记录的格式版本。⚠️ 2026-09-15 由 2 抬到 3：
+   参数个数从 30 变成 33（加了高度环 3 项），而记录里带 parameter_count 校验，
+   不抬版本的话**旧记录会被判成无效**（LOAD_SAVED 直接失败）。
+   抬版本 + 在 Blackbox_ReadSlot 里加一条 30 项的迁移分支，
+   旧记录会被读出并按当前默认值补齐新增的三项。 */
+#define BLACKBOX_PARAMETER_SCHEMA 3U
+/* 旧格式（26 项，v6）与上一版（30 项，v7）。数值不能改，它们是历史存档的标记。 */
 #define BLACKBOX_PARAMETER_LEGACY_SCHEMA 1U
+#define BLACKBOX_PARAMETER_V7_SCHEMA 2U
 #define BLACKBOX_SESSION_PID_PARAMETER_COUNT APEX_PID_V6_PARAMETER_COUNT
 #define BLACKBOX_RECORD_MAGIC 0x424C5832UL /* "BLX2" */
 #define BLACKBOX_RECORD_SCHEMA 3U
@@ -95,6 +102,19 @@ typedef struct
     uint16_t reserved;
 } BlackboxLegacyParameterRecord_t;
 
+/* 上一版（30 项）的参数记录。字段顺序必须与 BlackboxParameterRecord_t 完全一致，
+   迁移时才能用 memcpy 把它的 payload 直接搬过来。 */
+typedef struct
+{
+    uint32_t magic;
+    uint16_t schema;
+    uint16_t parameter_count;
+    uint32_t generation;
+    int32_t values_q10000[APEX_PID_V7_PARAMETER_COUNT];
+    uint16_t crc16;
+    uint16_t reserved;
+} BlackboxLegacyV7ParameterRecord_t;
+
 typedef struct
 {
     uint32_t magic;
@@ -124,10 +144,19 @@ typedef struct
     uint8_t type;
     uint8_t schema;
     uint16_t session_id;
+    /* 垂速环（内环）三增益 + 满杆油门。**这四项的偏移与长度一个字节都不能动**。 */
     int32_t altitude_q10000[4];
     /* 解锁瞬间的 UTC Unix 秒。没有合法 RMC 时为 0。老记录该处是 0。 */
     uint32_t utc_seconds;
-    uint8_t reserved0[32];
+    /* 高度环（外环）三增益。⚠️ 2026-09-15 新增，**刻意放在 utc 之后**，
+       占用的是原来 reserved0 的前 12 字节，于是：
+         · altitude_q10000 与 utc_seconds 的偏移**完全没变** ⇒ 旧记录读出来照样正确；
+         · 旧记录这 12 字节是全 0（memset 过） ⇒ 外环三项读成 0 = "外环关闭"，
+           而那时外环确实还不存在，语义也对；
+         · CRC 覆盖的仍是前 60 字节 ⇒ 旧记录的 CRC 依然校验通过。
+       ⇒ 因此**不需要**动 BLACKBOX_RECORD_SCHEMA，新旧记录用同一个结构都能读。 */
+    int32_t height_q10000[3];
+    uint8_t reserved0[20];
     uint16_t crc16;
     uint16_t reserved1;
 } BlackboxAltitudeParamsRecord_t;
@@ -385,6 +414,7 @@ static bool Blackbox_SaveSlot(uint32_t address, uint32_t generation, const int32
 static bool Blackbox_ReadSlot(uint32_t address, BlackboxParameterCandidate_t *candidate)
 {
     BlackboxParameterRecord_t record;
+    BlackboxLegacyV7ParameterRecord_t legacy_v7;
     BlackboxLegacyParameterRecord_t legacy;
     uint16_t crc;
 
@@ -399,6 +429,18 @@ static bool Blackbox_ReadSlot(uint32_t address, BlackboxParameterCandidate_t *ca
         if (crc != record.crc16) return false;
         candidate->generation = record.generation;
         memcpy(candidate->values_q10000, record.values_q10000, sizeof(candidate->values_q10000));
+    }
+    else if ((record.schema == BLACKBOX_PARAMETER_V7_SCHEMA) && (record.parameter_count == APEX_PID_V7_PARAMETER_COUNT))
+    {
+        /* 上一版 30 项记录（加高度环之前存的）。CRC 在原结构尾部，按原长度校验后
+           把 30 项搬回来，新增的高度环三项保留 PidTable_ExportSnapshot 出来的当前默认值。
+           ⚠️ 顺序不能颠倒：先 ExportSnapshot 填默认，再 memcpy 覆盖前 30 项。 */
+        memcpy(&legacy_v7, &record, sizeof(legacy_v7));
+        crc = ApexProtocol_Crc16((const uint8_t *)&legacy_v7, (uint16_t)(sizeof(legacy_v7) - 4U));
+        if (crc != legacy_v7.crc16) return false;
+        PidTable_ExportSnapshot(candidate->values_q10000);
+        memcpy(candidate->values_q10000, legacy_v7.values_q10000, sizeof(legacy_v7.values_q10000));
+        candidate->generation = legacy_v7.generation;
     }
     else if ((record.schema == BLACKBOX_PARAMETER_LEGACY_SCHEMA) && (record.parameter_count == APEX_PID_V6_PARAMETER_COUNT))
     {
@@ -790,6 +832,9 @@ static bool Blackbox_WriteSessionBegin(void)
     record.altitude.schema = BLACKBOX_RECORD_SCHEMA;
     record.altitude.session_id = blackbox_active_session_id;
     for (index = 0U; index < 4U; index++) record.altitude.altitude_q10000[index] = values[APEX_PID_VERTICAL_SPEED_KP + index];
+    /* 高度环（外环）三增益。与上面那组分开写，因为它们在协议表里不连续
+       （内环在 26~28、满杆在 29、外环在 30~32），用 + index 是安全的。 */
+    for (index = 0U; index < 3U; index++) record.altitude.height_q10000[index] = values[APEX_PID_HEIGHT_KP + index];
     if (!GPS_GetUtcTime(&record.altitude.utc_seconds)) record.altitude.utc_seconds = 0U;
     blackbox_session_begin_utc_seconds = record.altitude.utc_seconds;
     return Blackbox_AppendRecord(record.bytes);
@@ -1064,7 +1109,7 @@ static void Blackbox_DumpLogs(uint32_t max_records)
                 Blackbox_PrintPidHeader(pending_session_id, record.altitude.utc_seconds, pending_pid_q100);
                 pending_session_header = false;
             }
-            Debug_Printf("# altitude vz_kp=%.2f vz_ki=%.2f vz_kd=%.2f max_thr=%.0f utc=%lu\r\n", (double)record.altitude.altitude_q10000[0] / 10000.0, (double)record.altitude.altitude_q10000[1] / 10000.0, (double)record.altitude.altitude_q10000[2] / 10000.0, (double)record.altitude.altitude_q10000[3] / 10000.0, (unsigned long)record.altitude.utc_seconds);
+            Debug_Printf("# altitude vz_kp=%.2f vz_ki=%.2f vz_kd=%.2f max_thr=%.0f h_kp=%.2f h_ki=%.2f h_kd=%.2f utc=%lu\r\n", (double)record.altitude.altitude_q10000[0] / 10000.0, (double)record.altitude.altitude_q10000[1] / 10000.0, (double)record.altitude.altitude_q10000[2] / 10000.0, (double)record.altitude.altitude_q10000[3] / 10000.0, (double)record.altitude.height_q10000[0] / 10000.0, (double)record.altitude.height_q10000[1] / 10000.0, (double)record.altitude.height_q10000[2] / 10000.0, (unsigned long)record.altitude.utc_seconds);
         }
         else if (record.sample.type == BLACKBOX_RECORD_TYPE_SAMPLE)
         {

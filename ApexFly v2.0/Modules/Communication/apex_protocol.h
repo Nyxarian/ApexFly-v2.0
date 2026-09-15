@@ -23,7 +23,15 @@ extern "C" {
 #define APEX_PROTOCOL_HEADER_0 0xA5U
 #define APEX_PROTOCOL_HEADER_1 0x5AU
 #define APEX_PROTOCOL_VERSION 0x07U
-#define APEX_PROTOCOL_MAX_PAYLOAD_LENGTH 128U
+/* 单帧负载上限。⚠️ 2026-09-15 由 128 抬到 140：
+   加了高度环 3 项之后，PID 回包 = 4 + 33×4 = **136** 字节，
+   原先的 128 会让下面那句 #error 在编译期直接拦下。
+   140 = 136 + 4 字节余量，仍远低于 LoRa 模块的能力上限（ra01sc.h 的 255）。
+   ⚠️ 代价与为什么可以接受：PID 回包帧从 133 → 145 字节，空口时间约 +9%，
+      但它是**请求触发的一次性报文**（进 PID 页 GET / 改参 SET / SAVE），
+      不是周期流量 ⇒ **不影响遥测帧与控制帧**，飞行中的链路余量不变。
+   ⚠️ 这一项是两端共用的常量（遥控端 apex_protocol.h 必须同值），改了两端都要重烧。 */
+#define APEX_PROTOCOL_MAX_PAYLOAD_LENGTH 140U
 #define APEX_PROTOCOL_MAX_FRAME_LENGTH (9U + APEX_PROTOCOL_MAX_PAYLOAD_LENGTH)
 #define APEX_PROTOCOL_CONTROL_PAYLOAD_LENGTH 10U
 #define APEX_PROTOCOL_TELEMETRY_PAYLOAD_LENGTH 31U
@@ -31,11 +39,12 @@ extern "C" {
 #define APEX_PID_LEGACY_PARAMETER_COUNT 15U
 #define APEX_PID_V5_PARAMETER_COUNT 21U
 #define APEX_PID_V6_PARAMETER_COUNT 26U
-#define APEX_PID_PARAMETER_COUNT 30U
+#define APEX_PID_V7_PARAMETER_COUNT 30U
+#define APEX_PID_PARAMETER_COUNT 33U
 #define APEX_PROTOCOL_PID_RESPONSE_PAYLOAD_LENGTH (4U + (APEX_PID_PARAMETER_COUNT * 4U))
 #define APEX_PID_VALUE_SCALE 10000L
 
-/* PID 回包包含序号、状态、操作类型、参数版本及全部 30 个参数；负载上限不足时必须在编译期报错，避免遥控器永久等待确认。 */
+/* PID 回包包含序号、状态、操作类型、参数版本及全部 33 个参数；负载上限不足时必须在编译期报错，避免遥控器永久等待确认。 */
 #if (APEX_PROTOCOL_PID_RESPONSE_PAYLOAD_LENGTH > APEX_PROTOCOL_MAX_PAYLOAD_LENGTH)
 #error "APEX_PROTOCOL_MAX_PAYLOAD_LENGTH is too small for the PID response."
 #endif
@@ -137,7 +146,16 @@ typedef enum
     /* 满杆油门上限，单位微秒，最低油门固定 1000。
        枚举名里的 HOVER 是历史遗留：它不表示"悬停需要多少油门"，
        飞机端模块内部一律叫 max_throttle_us，改名只为对齐语义，协议数值不变。 */
-    APEX_PID_HOVER_PWM_US
+    APEX_PID_HOVER_PWM_US,
+    /* 高度环（**外环**）PID，2026-09-15 追加在最后，旧编号一律不变。
+       ⚠️⚠️ 与上面那组 VERTICAL_SPEED_* 是**两个不同的环**，千万不要混：
+            VERTICAL_SPEED_KP/KI/KD = **垂速环（内环）**：垂速误差 cm/s → 油门修正量 µs
+            HEIGHT_KP/KI/KD         = **高度环（外环）**：高度误差 cm   → 目标垂速 cm/s
+       控制代码要到 H13 才会去读这三个值；在那之前它们只是"协议 / 遥控可读写、
+       可存 Flash、可进黑匣子场次头"的参数，**不参与任何控制**（改它们不会影响飞行）。 */
+    APEX_PID_HEIGHT_KP,
+    APEX_PID_HEIGHT_KI,
+    APEX_PID_HEIGHT_KD
 } ApexPidParameterId_t;
 
 typedef enum
