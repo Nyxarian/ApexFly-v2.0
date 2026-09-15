@@ -17,8 +17,11 @@
  *
  * ── 溢出（ORE）必须自己兜住 ─────────────────────────────────
  * USART3 一出溢出，HAL 会把正在进行的接收中止掉、不再产生接收完成中断，
- * 表现就是"回显突然装死"。所以必须有 `HAL_UART_ErrorCallback` 清标志并重新武装，
- * 而不是指望它自己恢复。这一条是回显测试能"断开再插回来照样能用"的关键。
+ * 表现就是"回显突然装死"。所以 `USART3_IRQHandler` 里要**先清 ORE 再交给 HAL**，
+ * 并在末尾兜一次重新武装。这一条是回显测试能"断开再插回来照样能用"的关键。
+ *
+ * ⚠️ 这里**不能**用 `HAL_UART_ErrorCallback` 这个全局符号：GPS 已经在 `gps.c`
+ *    里定义了它（按 USART2 过滤），再定义一个会链接冲突。
  */
 
 #include "serial_echo.h"
@@ -123,29 +126,37 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 }
 
 /**
- * @brief 接收出错回调（溢出 ORE / 帧错误等）。运行在 USART3 中断上下文。
- *
- * ⚠️ 这段是必需的：HAL 在出错时会中止接收，不重新武装就再也不会有接收完成回调，
- * 表现为"回显装死"。清掉接收错误标志后重新武装即可继续。
- */
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-    if ((huart == NULL) || (huart->Instance != USART3))
-    {
-        return;
-    }
-
-    /* 读 SR 再读 DR，把 PE/FE/NE/ORE 一起清掉。 */
-    __HAL_UART_CLEAR_PEFLAG(&huart3);
-    (void)HAL_UART_Receive_IT(&huart3, &serial_echo_rx_byte, 1U);
-}
-
-/**
  * @brief USART3 全局中断。【临时】由本模块实现，覆盖启动文件里的 WEAK 默认版本。
+ *
+ * 这里承担两件事：
+ *
+ * 1. **先把溢出标志清掉再交给 HAL**。HAL 只要看到 ORE 就会中止正在进行的接收，
+ *    而接收一停就再也不会有接收完成回调 —— 表现就是"回显突然装死"。
+ *    清掉之后 HAL 只看到 RXNE，正常走接收流程。
+ *    ⚠️ 只能写 ICR 清单个 ORE，**不能**用 `__HAL_UART_CLEAR_PEFLAG`：
+ *       那个宏靠"读 SR 再读 DR"来清标志，而读 DR 会把一个还没取走的字节吃掉。
+ *
+ * 2. **兜一次重新武装**。HAL 因为别的错误（帧错 / 噪声）中止接收时，RxState 会退回
+ *    READY，这里补一次。正常路径下回调里已经重新武装过、RxState 是 BUSY_RX，
+ *    所以这句不会重复武装。
+ *
+ * ⚠️ 为什么不另写一个 `HAL_UART_ErrorCallback`：**那个全局符号 GPS 已经占用了**
+ *    （`gps.c` 里按 `Instance != USART2` 过滤，对 USART3 直接返回），
+ *    再定义一个会链接冲突 `L6200E: multiply defined`。所以错误处理就近放在中断里。
  */
 void USART3_IRQHandler(void)
 {
+    if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_ORE) != RESET)
+    {
+        __HAL_UART_CLEAR_OREFLAG(&huart3);
+    }
+
     HAL_UART_IRQHandler(&huart3);
+
+    if (huart3.RxState != HAL_UART_STATE_BUSY_RX)
+    {
+        (void)HAL_UART_Receive_IT(&huart3, &serial_echo_rx_byte, 1U);
+    }
 }
 
 void SerialEcho_Task(void *argument)
