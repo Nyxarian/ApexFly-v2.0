@@ -11,10 +11,35 @@
  *
  * ── 垂速内环（H9）───────────────────────────────────────────
  * 快层控制律 ∆µs = Kp_v × (vz_sp − vz_est)，本阶段只有 P（Ki/Kd 走参数表，默认 0）。
- * `vz_sp` **固定 0**（VERTICAL_INNER_VZ_SP_CMS），含义是"把垂速压到 0"：
+ * H9~H12 期间 `vz_sp` 是一个**写死的常数 0**，含义是"把垂速压到 0"：
  *   飞机被抬起来（vz>0）→ 减油门；被压下去（vz<0）→ 加油门。一个纯阻尼器。
+ * ⭐ **H13 起 `vz_sp` 由外环给出**（见下一段），内环的代码一行没改 ——
+ *    这正是"串级"的用意：外环换掉，内环照旧。
  *
- * ⚠️⚠️ **符号是这一环唯一真正危险的东西，而危险恰恰在于它"看起来显然"。**
+ * ── 外环：高度 → 目标垂速（H13）──────────────────────────────
+ * ⭐⭐ 到这里**串级才真正成立**。H13 之前 `h_sp` 是"积分出来但没人读"的死量，
+ *    所以推杆不能命令高度、飞机也不能起飞（详见下面「为什么 H13 之前定高起不来」）。
+ *
+ *     vz_sp = clamp( h_kp × (h_sp − h_est)， ±VERTICAL_OUTER_VZ_SP_MAX_CMS )，死区内为 0
+ *
+ * 用 `Pid_t` 而不是手写纯 P：`h_kp / h_ki / h_kd` 是**协议 ID 30/31/32**，
+ * 遥控端已经能改（v0.17 就加好了），手写 P 会让后两个变成永远没用的死参数。
+ * H13 阶段 `h_ki = h_kd = 0`，所以实际就是 P，但通道是活的（H15 要用）。
+ *
+ * ⚠️⚠️ **增益必须比 §3.3 的设计值保守**：回路延迟消不掉（ToF 83ms + 差分垂速 +
+ *    限速器 125ms），`Kp_v=20` 时内环闭环时间常数只有 11ms，比延迟快 8~15 倍。
+ *    仿真确认 60~80ms 延迟下 `vz_kp=20 / h_kp=0.6` 进入极限环。
+ *    ⇒ 首飞 `vz_kp=5 / h_kp=0.3`。详见头文件的常量段。
+ *
+ * ── 为什么 H13 之前定高"起飞不了"（这一环的直接动机）────────────
+ * 悬停油门估计器只在该层有**垂速误差**时才学习。H13 之前 `vz_sp ≡ 0`，
+ * 于是飞机在地面上 `vz = 0` ⇒ 误差 0 ⇒ 慢层不动 ⇒ 油门停在初值 1250
+ * （真实悬停约 1450）⇒ **永远离不开地面**。
+ * 接上外环之后：`h_sp` 有误差 ⇒ `vz_sp > 0` ⇒ 慢层开始学 ⇒ 约 5~6 秒后油门到悬停值 ⇒ 起飞。
+ * ⚠️ 这 5~6 秒的"憋油门"是"悬停油门必须自己学"（§2.3 选 2）的必然代价，
+ *    不是缺陷，但**必须写进 H14 的首飞流程**（推杆后等约 7 秒）。
+ *
+ * ── 垂速内环的符号（H9 起，仍然是最危险的一条）──────────────
  *    回路上有两个半截，两个**本来就都是正的**：
  *      油门↑ → 推力↑ → 向上加速度↑（执行器，`mixer.h` 已实测确认四路极性）
  *      真实 vz↑ → vz_est↑（估计器，H3 已验"匀速抬手符号正确"）
@@ -80,10 +105,10 @@
  * 混成一层会自相矛盾——"要求已解锁才能切换"和"切换必须在地面"打架。
  *
  * ── 每拍的执行顺序（就是下面 Update 里的顺序，不要重排）────────
- *   ⓪ 刷新内环参数（H9）
+ *   ⓪ 刷新内环与外环参数（H9 / H13）
  *   → ① 读估计器 → ② 填杆量与请求 → ③ 算门禁① → ④ 切换（可能复位）
  *   → ⑤ 积分 h_sp → ⑥ 停手判定 → ⑦ 算门禁② → ⑧ 定状态
- *   → ⑨ 失效处理（H12） → ⑩ 垂速内环快层 + 悬停油门慢层（H9/H10）
+ *   → ⑨ 失效处理（H12） → ⑩ **外环（H13）** + 垂速内环快层 + 悬停油门慢层（H9/H10）
  *   → ⑪ 遥测字节
  * ⑤ 必须在 ④ 之后：切换时复位出来的 h_sp 是这一拍积分的起点。
  * ⑦ 必须在 ⑥ 之后：门禁②里有一位就是"不处于停手"。
@@ -124,6 +149,22 @@ static bool vertical_takeoff_guard;
    写进去的 inner_setpoint —— 直接调它很容易让后来的人以为外环已经在跑了。
    （而且 H13 的外环有 2cm 死区和 ±20cm/s 钳位，CascadePid 装不下，届时本来就要重排。） */
 static Pid_t vertical_inner_pid;
+
+/* ── 外环（H13）：高度误差 → 目标垂速 ─────────────────────────
+   用 `Pid_t` 而不是手写纯 P，是为了让协议 ID 30/31/32 的 `h_ki` / `h_kd` 保持"活"的
+   （遥控端 v0.17 就能改它们，手写 P 会让那两个参数永远是死参数）。
+   H13 阶段 `h_ki = h_kd = 0`，所以行为就是 P + 死区。
+   ⚠️ 与内环一样，`Pid_Update` 里的 D 是**对测量值求导**（这里 measured = h_est），
+      所以 `h_kd` 的作用是 `−h_kd × vz`，等于给 vz_sp 加一个速度反馈项。
+      H15 开它的时候要知道这一层含义（它不是"对误差求导"）。 */
+static Pid_t vertical_outer_pid;
+
+/* 外环参数缓存。与内环同一套约定：只在**真的变了**时才 Pid_ApplyParams
+   （ApplyParams 会清积分；H13 阶段 Ki=0 无所谓，但 H15 打开 Ki 之后就是必须的）。 */
+static float vertical_outer_kp;
+static float vertical_outer_ki;
+static float vertical_outer_kd;
+static bool vertical_outer_params_valid;
 
 /* ── 悬停油门估计器（H10）：慢层 ────────────────────────────────
    它**不是** PID 的积分项，而是手写的一阶累加器，单位微秒，直接表示"当前认为的
@@ -589,6 +630,70 @@ static void VerticalControl_RefreshInnerParams(void)
     vertical_inner_params_valid = true;
 }
 
+/**
+ * @brief 每拍刷新**外环**参数（H13），参数没变就直接返回。
+ *
+ * 与内环同一套约定：读参数表 → 缓存比对 → 变了才 `Pid_ApplyParams`。
+ * ⚠️ 为什么必须缓存而不是每拍无脑 Apply：`Pid_ApplyParams` 内部会清积分与微分历史。
+ *    H13 阶段 `h_ki = 0` 时看起来无所谓，但 H15 一旦打开 `h_ki`，
+ *    每拍 Apply 就等于把外环积分永远按在 0 上 —— 那是个很难查的 bug。
+ *
+ * 三个参数都**原样**传给 PID（不像内环要把 ki 写死 0）：
+ * 内环的 ki 是"慢层积分器"在用，外环没有第二个积分器，所以它的 ki 就是 PID 自己的。
+ */
+static void VerticalControl_RefreshOuterParams(void)
+{
+    float kp;
+    float ki;
+    float kd;
+
+    PidTable_GetHeightParams(&kp, &ki, &kd);
+
+    if (vertical_outer_params_valid &&
+        (kp == vertical_outer_kp) && (ki == vertical_outer_ki) && (kd == vertical_outer_kd))
+    {
+        return;
+    }
+
+    /* 积分限幅按向上余量的比例推导，沿用 attitude_control 的既有约定
+       （外环 0.15）。H13 阶段 Ki=0，本值暂不起作用。 */
+    Pid_ApplyParams(&vertical_outer_pid, kp, ki, kd,
+                    VERTICAL_OUTER_VZ_SP_MAX_CMS * VERTICAL_OUTER_I_LIMIT_RATIO,
+                    VERTICAL_OUTER_VZ_SP_MAX_CMS, -VERTICAL_OUTER_VZ_SP_MAX_CMS);
+
+    vertical_outer_kp = kp;
+    vertical_outer_ki = ki;
+    vertical_outer_kd = kd;
+    vertical_outer_params_valid = true;
+}
+
+/**
+ * @brief 算外环的**有效设定值**（H13），实现"硬死区"。
+ *
+ * 为什么返回"设定值"而不是直接返回"输出"：`Pid_Update(pid, setpoint, measured, dt)`
+ * 内部算的是 `setpoint − measured`，所以硬死区最干净的实现就是
+ * **"误差落在死区内时，把设定值直接当成当前值传进去"** ⇒ 误差为 0 ⇒ 输出 0。
+ *
+ * ⭐ 这样做还有一个不那么显然的好处：PID 的内部历史（微分滤波、上一拍测量）
+ *    **照常推进**。如果改成"死区内干脆不调用 Pid_Update"，那么恢复出死区的那一拍
+ *    会拿一个很久以前的 `last_measured` 去求导 ⇒ 产生一个假的微分尖峰。
+ *
+ * ⚠️ 代价：`Ki ≠ 0` 时积分在死区内**保持不动**（不衰减）。
+ *    H13 阶段 `Ki = 0` 无影响；H15 打开 Ki 时要回来重新决定
+ *    "死区内让积分衰减还是不衰减"。**这是登记在案的待办，不是遗漏。**
+ */
+static float VerticalControl_OuterSetpoint(float h_sp_cm, float h_est_cm)
+{
+    float error = h_sp_cm - h_est_cm;
+
+    if ((error <= VERTICAL_OUTER_DEADBAND_CM) && (error >= -VERTICAL_OUTER_DEADBAND_CM))
+    {
+        return h_est_cm;   /* 死区内：设定值 = 当前值 ⇒ 误差 0 ⇒ 输出 0 */
+    }
+
+    return h_sp_cm;
+}
+
 void VerticalControl_Init(void)
 {
     memset(&vertical_snapshot, 0, sizeof(vertical_snapshot));
@@ -613,6 +718,11 @@ void VerticalControl_Init(void)
     vertical_inner_params_valid = false;
     VerticalControl_RefreshInnerParams();
 
+    /* 外环（H13）同样先给"输出恒 0"的合法初值，再立刻去读真实参数。 */
+    Pid_Init(&vertical_outer_pid, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    vertical_outer_params_valid = false;
+    VerticalControl_RefreshOuterParams();
+
     /* 调试覆盖不在这里清：那是台架手段，不该被 IMU 重初始化顺手清掉。 */
 }
 
@@ -630,6 +740,11 @@ void VerticalControl_Reset(void)
         而两次飞行的重量/电压可能不同）。
        ⚠️ 只清运行状态，不重读参数——参数没变就没必要 ApplyParams。 */
     Pid_Reset(&vertical_inner_pid);
+    /* 外环也要复位（H13）。
+       ⭐ 顺带说清"复位之后为什么不会有跳变"：本函数上面已经把 `h_sp` 对齐到 `h_est`，
+         所以外环的误差是 0 ⇒ `vz_sp = 0` ⇒ 内环目标 0 ⇒ 修正量回到 0 附近。
+         这正是 §2.4 要的"模式切换无扰"，而且它是**自动成立**的，不需要额外代码。 */
+    Pid_Reset(&vertical_outer_pid);
     vertical_throttle_base_us = VERTICAL_THROTTLE_START_US;
     vertical_snapshot.vz_sp_cms = 0.0f;
     vertical_snapshot.vz_correction_us = 0.0f;
@@ -648,9 +763,10 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
     VerticalEstState_t est;
     uint32_t elapsed_ms;
 
-    /* ⓪ 参数与限幅（H9）。放在最前面：本拍所有用到内环的地方都要用最新的限幅。
+    /* ⓪ 参数与限幅（H9 / H13）。放在最前面：本拍所有用到两个环的地方都要用最新的参数。
         内部有缓存比对，参数没变时只是一次临界区读 + 几次整数/浮点比较。 */
     VerticalControl_RefreshInnerParams();
+    VerticalControl_RefreshOuterParams();
 
     /* ① 读估计器。valid 为 false 时 h/vz 是"最后一次可信值"而不是当前值，
           所以下面每一处拿高度做判断的地方都要先看 est.valid。 */
@@ -802,25 +918,57 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
         vertical_snapshot.state = (uint8_t)VERTICAL_STATE_FAILSAFE_DESCEND;
     }
 
-    /* ⑩ 垂速内环（H9）+ 悬停油门估计器（H10）。
-       ⚠️ 必须在 ⑨ 之后：失效期间要**冻结**两层，而"是否冻结"正是 ⑨ 决定的。
-       三种情况：*/
+    /* ⑩ **外环（H13）** + 垂速内环（H9）+ 悬停油门估计器（H10）。
+       ⚠️ 必须在 ⑨ 之后：失效期间要**冻结**这两层，而"是否冻结"正是 ⑨ 决定的。
+       外环排在最前面，因为内环的目标就是它的输出。三种情况：*/
     if (VerticalControl_IsActive())
     {
-        /* ⚠️⚠️ 参数顺序**绝对不能反**：Pid_Update(pid, setpoint, measured, dt)
-              内部算的是 error = setpoint − measured。vz_sp = 0 所以 error = −vz_est，
-              **这个减号就是整个回路里唯一的反号**，也就是负反馈的全部来源。
-              写成 `Pid_Update(&vertical_inner_pid, vertical_snapshot.vz_est_cms, 0.0f, dt_s)`
-              就是正反馈：飞机被抬起来反而加油门，会一直往上飞。
-              编译器不会报错，静态检查也查不出来 —— 这是 H9 台架验收 ⑤⑥ 存在的全部理由，
+        /* ── 外环（H13）：高度误差 → 目标垂速 ─────────────────────
+           ⚠️⚠️ 必须在算 `corr` **之前** —— 内环的目标就是它的输出，顺序反了内环会用
+              上一拍的外环输出算修正量（多一拍延迟，正是本环节最怕的东西）。
+
+           ⚠️ 符号：`h_sp > h_est`（命令上升）⇒ 误差 > 0 ⇒ `vz_sp > 0` ⇒ 内环加油门。
+              这里**看不到任何反号** —— 反号藏在 `Pid_Update` 内部（它算 setpoint − measured）。
+              ⇒ 所以**参数顺序反了就是正反馈**：
+                 写成 `Pid_Update(&vertical_outer_pid, h_est, h_sp, dt)` 的话，
+                 高度偏低反而命令下降 ⇒ 越掉越低。
+              与被锁存的 `h_sp` 一起看，现象是"飞机慢慢沉下去、越沉越快"。
+              编译器不会报错、静态检查也查不出来 —— 台架验收 ② 专门抓它，
+              和 H9/H10 那两个减号是同一类错误（本项目第 3 次遇到）。
+
+           ⚠️ 死区用 `VerticalControl_OuterSetpoint()` 实现（界内把设定值当成当前值），
+              而不是在这里写 `if (|误差| < 2) vz_sp = 0` —— 后者会让 PID 的
+              微分历史停更，出死区那一拍产生假尖峰。详见那个函数的注释。 */
+        vertical_snapshot.vz_sp_cms = Pid_Update(&vertical_outer_pid,
+                                                 VerticalControl_OuterSetpoint(vertical_snapshot.h_sp_cm, vertical_snapshot.h_est_cm),
+                                                 vertical_snapshot.h_est_cm,
+                                                 dt_s);
+        /* ── 内环（H9）：目标垂速 → 油门修正量。H13 只换了它的**目标来源**，代码没动。
+           ⚠️⚠️ 参数顺序**绝对不能反**：`Pid_Update(pid, setpoint, measured, dt)`
+              内部算的是 `error = setpoint − measured`，
+              **那个减号就是整个回路里唯一的反号**，也就是负反馈的全部来源。
+              H13 之前 setpoint 恒 0（"把垂速压到 0"），现在 setpoint 是外环给的 `vz_sp`；
+              但**反号的位置一个字节都没变**，仍在 `Pid_Update` 内部。
+              写成 `Pid_Update(&vertical_inner_pid, vz_est, vz_sp, dt)` 就是正反馈：
+              飞机被抬起来反而加油门，会一直往上飞。
+              编译器不会报错、静态检查也查不出来 —— 这是 H9 台架验收 ⑤⑥ 存在的全部理由，
               H9 已实测通过（强信号 85/85 反号）。 */
-        vertical_snapshot.vz_sp_cms = VERTICAL_INNER_VZ_SP_CMS;
-        vertical_snapshot.vz_correction_us = Pid_Update(&vertical_inner_pid, VERTICAL_INNER_VZ_SP_CMS, vertical_snapshot.vz_est_cms, dt_s);
+        vertical_snapshot.vz_correction_us = Pid_Update(&vertical_inner_pid, vertical_snapshot.vz_sp_cms, vertical_snapshot.vz_est_cms, dt_s);
 
         /* ── 慢层：悬停油门估计器 ────────────────────────────────
-           与快层**用同一个误差、同一个符号约定**（这是刻意的，两层的方向必须一致）：
-             飞机上升（vz>0）→ error<0 → 积分下降 → 少给油 → 把它压回去；
-             飞机下沉（vz<0）→ error>0 → 积分上升 → 多给油 → 把它托起来。
+           与快层**用同一个误差、同一个符号约定** —— H10 写这个函数时就是这么写的注释，
+           但当时 `vz_sp` 恒 0，所以两层其实并不"同一个误差"；**H13 把它补成真的了**：
+             飞机上升（vz > vz_sp）→ error<0 → 积分下降 → 少给油 → 把它压回去；
+             飞机下沉（vz < vz_sp）→ error>0 → 积分上升 → 多给油 → 把它托起来。
+           ⚠️ **为什么必须用 `vz_sp` 而不是 0**（H13 的关键一处）：
+              慢层的职责是"吸收内环稳态输出"，也就是**在修正量为 0 时飞机该用的推力**。
+              稳态跟踪时 `vz = vz_sp`，内环的 P 项为 0 ⇒ `thr = i`。
+              如果用 0 当目标：持续爬升（vz = +3）时慢层会一直往下积分，
+              于是 `i` 漂到"悬停 − 50"、内环的 corr 顶在 +50 上顶着 —— 表现为
+              **估计出来的"悬停油门"是错的**，而那个数正是 H12 失效锁存和黑匣子的依据。
+           ⭐ 用 `vz_sp` 之后，H10 实测过的那两条判据**照样成立**：
+              杆在中段（`h_sp ≈ h_est` ⇒ `vz_sp = 0`）时匀速上抬飞机 ⇒ `i` 仍然下降。
+              H13 新增的现象是"杆推上去 ⇒ `vz_sp > 0` ⇒ `i` 开始涨" —— 那正是**起飞**。
            ⚠️ 这个减号写反就是正反馈，性质与快层那个减号完全相同，也会导致失控。
               台架验收的 ⑥⑦ 两条专门抓它（匀速上抬 → i 必须往下降）。
            ⚠️ dt_s 用与 Pid_Update **完全相同**的有效性判据（[0.5ms, 100ms]）：
@@ -830,7 +978,7 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
               这样遥控把 vz_ki 调成 0 就等价于"冻结悬停油门估计"，便于台架取证。 */
         if ((dt_s >= 0.0005f) && (dt_s <= 0.10f) && (vertical_inner_ki != 0.0f))
         {
-            vertical_throttle_base_us += (VERTICAL_INNER_VZ_SP_CMS - vertical_snapshot.vz_est_cms) * vertical_inner_ki * dt_s;
+            vertical_throttle_base_us += (vertical_snapshot.vz_sp_cms - vertical_snapshot.vz_est_cms) * vertical_inner_ki * dt_s;
         }
 
         /* ⭐ 积分的钳位，与最终输出的钳位是**同一对数字**（见头文件的常量段）。

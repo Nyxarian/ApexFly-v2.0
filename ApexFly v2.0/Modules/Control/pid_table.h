@@ -61,18 +61,39 @@ uint16_t PidTable_GetMaxThrottleUs(void);
  * @brief 读取定高**垂速环（内环）**的三个增益（协议 ID 25~27）。
  *
  * ⚠️ 这是**内环**。高度轴的**外环**（高度误差 → 目标垂速）是另一组，
- *    ID 30~32，要到 H13 才会被控制代码读取，届时在这里补一个对应的
- *    `PidTable_GetHeightParams()`（现在不提前加：没有调用方的接口就是死代码）。
+ *    ID 30~32，由 `PidTable_GetHeightParams()` 读取（H13 起被控制代码使用）。
  *
  * 这三项在 H9 之前只作为协议 ID 的读写载体存在、不参与任何控制；
  * H9 把垂速内环接上之后它们才真正生效。**本函数只提供读，不写 PID**——
  * 谁用谁负责判断"参数变了没有、要不要 Pid_ApplyParams"，因为 ApplyParams 会清积分。
+ *
+ * ⚠️ 默认值是 **100**，但台架/首飞都**不该用默认值**：
+ *    高度回路延迟消不掉（ToF 83ms + 差分垂速 + 限速器），H9 方案里推的 20
+ *    在延迟下已经进入极限环，**首飞建议从 5 起步**（见 vertical_control.h 的常量段）。
  *
  * @param vz_kp 输出，垂速内环比例增益，单位 µs/(cm/s)。可为空。
  * @param vz_ki 输出，垂速内环积分增益，单位 µs/cm。可为空。
  * @param vz_kd 输出，垂速内环微分增益。可为空。
  */
 void PidTable_GetAltitudeParams(float *vz_kp, float *vz_ki, float *vz_kd);
+
+/**
+ * @brief 读取定高**高度环（外环）**的三个增益（协议 ID 30~32，H13 新增）。
+ *
+ * 量纲：**高度误差（cm） → 目标垂速（cm/s）**，所以 `h_kp` 的单位是 (cm/s)/cm = 1/s。
+ *
+ * ⚠️ 与 `PidTable_GetAltitudeParams` 同一套约定：**只提供读，不写 PID**。
+ *    调用方（`vertical_control.c`）负责缓存比对，只在真的变了时才 `Pid_ApplyParams`。
+ *
+ * ⚠️ 默认值 **0.3**（H13 从方案 §3.3 的 0.6 降下来）：0.6 在真实回路延迟下不稳。
+ *    理由与整定顺序见 `vertical_control.h` 的外环常量段。
+ *
+ * @param h_kp 输出，外环比例增益，"每 1cm 高度误差给多少 cm/s 目标垂速"。可为空。
+ * @param h_ki 输出，外环积分增益。可为空。
+ * @param h_kd 输出，外环微分增益。⚠️ `pid.c` 的 D 是**对测量值求导**，
+ *             这里测量值是 `h_est`，所以它实际相当于一个 `−h_kd × vz` 的速度反馈项。
+ */
+void PidTable_GetHeightParams(float *h_kp, float *h_ki, float *h_kd);
 
 /**
  * @brief 读取横滚、俯仰 Trim，加在跟杆目标角上，单位度。

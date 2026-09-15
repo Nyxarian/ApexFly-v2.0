@@ -296,7 +296,10 @@ void ToF_Task(void *argument)
                            fs    = 失效计时 ms（H12）：0 没失效 / 0~2000 在保持 / ≥2000 已在下降
                            fr    = 失效原因（H12）：0 无 / 1 ToF 读数失效 / 2 姿态超限 / 3 高度越界
                                    ⚠️ **fr=2 时 thr 立刻变成 1000**（判定炸机、不进保持段），是设计不是 bug
-                 ④ 输出    corr  = **快层**：垂速内环修正量 µs —— ⚠️ **符号必须与 vz 相反**
+                 ④ 输出    vzsp  = **外环（H13）**：内环的目标垂速 cm/s = h_kp × (h_sp − h)
+                                   ⚠️ **符号**：h_sp > h（命令上升）⇒ 它是**正**的；死区 2cm 内恒 0
+                                   ⭐ 台架上它是"外环有没有接上"的唯一观测量
+                           corr  = **快层**：垂速内环修正量 µs —— ⚠️ **符号必须与 vz 相反**
                                    （vz>0 时 corr<0），这是负反馈的唯一证据
                             i     = **慢层**：悬停油门估计器（H10 起），钳在 1150~1650
                                     ⭐ 台架上**只有它**能看出积分在不在工作：corr 是快层、
@@ -316,7 +319,7 @@ void ToF_Task(void *argument)
                  rate=           由 stick 唯一决定（三段映射是纯函数）
                  vzsp=           H9 阶段恒 0；**H13 接外环时要加回来**
                  h= / v= / vz=（旧 [ALT] 那三个）与②段完全重复 */
-            Debug_Printf("[V] raw=%umm | h=%.1fcm vz=%+.1fcm/s v=%u | req=%u mode=%u st=%u sw=0x%X ct=0x%X stick=%u h_sp=%.1f gt=%lums fs=%lums fr=%u | corr=%+.1f i=%.1f thr=%u\r\n",
+            Debug_Printf("[V] raw=%umm | h=%.1fcm vz=%+.1fcm/s v=%u | req=%u mode=%u st=%u sw=0x%X ct=0x%X stick=%u h_sp=%.1f gt=%lums fs=%lums fr=%u | vzsp=%+.1f corr=%+.1f i=%.1f thr=%u\r\n",
                          (unsigned)tof_snapshot.distance_raw_mm,
                          (double)vertical_control_state.h_est_cm,
                          (double)vertical_control_state.vz_est_cms,
@@ -331,6 +334,7 @@ void ToF_Task(void *argument)
                          (unsigned long)vertical_control_state.ground_timer_ms,
                          (unsigned long)vertical_control_state.failsafe_ms,
                          (unsigned)vertical_control_state.fail_reason,
+                         (double)vertical_control_state.vz_sp_cms,
                          (double)vertical_control_state.vz_correction_us,
                          (double)vertical_control_state.vz_throttle_base_us,
                          (unsigned)radio_state.throttle_pwm_us);

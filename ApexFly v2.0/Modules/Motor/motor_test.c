@@ -599,9 +599,12 @@ void MotorTest_Task(void *argument)
                       要在飞行整定时用它，得给样本加一列（改 BLACKBOX_RECORD_SCHEMA，
                       属独立改动，H10 没做）。 */
                 sample.vz_correction_us = MotorTest_ToI16(vertical_control_state.vz_correction_us);
-                /* 目标垂速。H10 阶段内环的 vz_sp 恒 0，所以这一列现在是常数 0；
-                   H13 接上外环（h_sp − h_est → vz_sp）之后它才开始有内容，
-                   那正是"整定时最想看的一列"。 */
+                /* 目标垂速 = **外环的输出**（H13 起不再是常数 0）。
+                   ⭐ 这是整定时最想看的一列：把它和 vz_cms（实际垂速）画在一起，
+                      就能看出"内环跟不跟得上外环给的目标"。
+                   ⚠️ 它钳在 ±20cm/s（VERTICAL_OUTER_VZ_SP_MAX_CMS），
+                      而 int16 存 cm/s 绰绰有余，不会溢出。
+                   ⚠️ 失效期间（st=6/7）外环冻结 ⇒ 这一列保持失效前的值，不是 0。 */
                 sample.vz_target_cms = MotorTest_ToI16(vertical_control_state.vz_sp_cms);
                 /* 高度控制的细分状态。**按位打包**（方案 §12.2 的约定）：
                      bit0-3 = 细分状态（0 普通 / 1 定高在干活 / 4 停手 / 5 已进模式未使能 /

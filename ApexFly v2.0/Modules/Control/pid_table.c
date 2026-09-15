@@ -67,10 +67,23 @@ typedef struct
 #define PID_TABLE_ALTITUDE_DEFAULT_VZ_KP            100.0f
 #define PID_TABLE_ALTITUDE_DEFAULT_VZ_KI            0.0f
 #define PID_TABLE_ALTITUDE_DEFAULT_VZ_KD            0.0f
-/* 外环 Kp 默认取方案 §3.3 已经定下的 0.6，而不是 0：
-   0 的含义是"外环关闭"，会让 H13 接上之后忘记设参的飞机只靠内环阻尼、
-   以一个恒定速度缓慢下沉。给设计值更不容易漏。KI/KD 默认 0（方案里外环就是 P）。 */
-#define PID_TABLE_ALTITUDE_DEFAULT_H_KP             0.6f
+/* 外环 Kp 默认值。量纲：高度误差 cm → 目标垂速 cm/s，所以单位是 1/s。
+   ⚠️ 2026-09-15（H13）由方案 §3.3 的设计值 **0.6 降到 0.3**，理由是**回路延迟**：
+      ToF 一步 20ms、4 步一个测量周期 = 83ms，再加差分垂速、低通、限速器
+      （±50µs 满幅修正要走 125ms）；§3.8 的滞后预算是 60ms。
+      手算相位裕度：悬停点 d(推力比)/du = 2/415 ⇒ 修正量每变 1µs，加速度变 4.7cm/s²；
+      内环 corr = −Kp_v·vz 的闭环时间常数 = 1/(Kp_v × 4.7)，Kp_v=20 时只有 11ms，
+      比延迟快 8~15 倍 ⇒ 相位裕度必然为负。
+      仿真（`sim_h13_takeoff.js`）确认：60~80ms 延迟下 `vz_kp=20 / h_kp=0.6`
+      **进入极限环**（末段垂速 ±27cm/s）；延迟 0 时同一组参数完全稳定。
+   ⇒ **默认值必须是"安全值"而不是"设计值"**：擦 Flash / 上电默认时，
+     飞机会用这个值起飞。往保守方向错的代价只是"反应迟钝"，往激进方向错是炸机。
+   ⚠️ 与 MAX THROTTLE 同一个坑：**Flash 里存着旧值的话 `LOAD_SAVED` 会把 0.6 带回来**，
+      首飞前要在遥控器上确认这一项的显示值（或者手动设成 0.3）。
+   ⚠️ 默认值**不是 0**：0 的含义是"外环关闭"，那时飞机只靠内环阻尼、
+      以一个恒定速度缓慢下沉 —— 比"迟钝"危险得多。
+   KI/KD 默认 0（方案里外环就是 P）。 */
+#define PID_TABLE_ALTITUDE_DEFAULT_H_KP             0.3f
 #define PID_TABLE_ALTITUDE_DEFAULT_H_KI             0.0f
 #define PID_TABLE_ALTITUDE_DEFAULT_H_KD             0.0f
 /* 满杆对应的最高油门，单位微秒。这是**普通模式**杆推到底给的值。
@@ -348,6 +361,22 @@ uint16_t PidTable_GetMaxThrottleUs(void)
     if (max_throttle_us < PID_TABLE_MAX_THROTTLE_MIN_US) max_throttle_us = PID_TABLE_MAX_THROTTLE_MIN_US;
     if (max_throttle_us > PID_TABLE_MAX_THROTTLE_MAX_US) max_throttle_us = PID_TABLE_MAX_THROTTLE_MAX_US;
     return (uint16_t)(max_throttle_us + 0.5f);
+}
+
+void PidTable_GetHeightParams(float *h_kp, float *h_ki, float *h_kd)
+{
+    float kp;
+    float ki;
+    float kd;
+
+    taskENTER_CRITICAL();
+    kp = pid_table.altitude.h_kp;
+    ki = pid_table.altitude.h_ki;
+    kd = pid_table.altitude.h_kd;
+    taskEXIT_CRITICAL();
+    if (h_kp != NULL) *h_kp = kp;
+    if (h_ki != NULL) *h_ki = ki;
+    if (h_kd != NULL) *h_kd = kd;
 }
 
 void PidTable_GetAltitudeParams(float *vz_kp, float *vz_ki, float *vz_kd)
