@@ -209,6 +209,14 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
 
   /* USER CODE BEGIN USART3_MspInit 1 */
 
+  /* ⚠️【临时】串口回显测试要开 USART3 接收中断，见 Modules/De_Bug/serial_echo.c
+     与 优化一下/串口回显测试（临时）.md。
+     优先级取 6：必须 >= configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY(=5)，
+     否则在中断里调用 FreeRTOS 的 xSemaphoreGiveFromISR 会破坏内核。
+     回显测试做完要把下面两行一起删掉。 */
+  HAL_NVIC_SetPriority(USART3_IRQn, 6, 0);
+  HAL_NVIC_EnableIRQ(USART3_IRQn);
+
   /* USER CODE END USART3_MspInit 1 */
   }
 }

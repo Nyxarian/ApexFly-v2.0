@@ -71,6 +71,14 @@
 #define BLACKBOX_COMMAND_BUFFER_SIZE 40U
 #define BLACKBOX_UART_POLL_MS 5U
 #define BLACKBOX_STATUS_PRINT_MS 10000U
+/* ⚠️【临时】串口回显测试期间：
+   ① 停掉串口轮询 —— RX 已经被 Modules/De_Bug/serial_echo.c 的接收中断接管，
+      再轮询会抢走 RDR 里的字节，还可能把回显数据误当命令解析；
+   ② 静音 [BB] rec= 周期日志。
+   ⚠️ 副作用：测试期间 dump / dumpall / calmag / vm 全部不可用。测完都改回 1U。
+   详见 优化一下/串口回显测试（临时）.md。 */
+#define BLACKBOX_UART_POLL_ENABLE 0U
+#define BLACKBOX_STATUS_PRINT_ENABLE 0U
 #define BLACKBOX_DUMP_DEFAULT_RECORDS 20000U
 
 typedef struct
@@ -1477,8 +1485,8 @@ void Blackbox_Task(void *argument)
                     }
                 }
             }
-            Blackbox_PollUart();
-            if ((int32_t)(xTaskGetTickCount() - next_status_tick) >= 0)
+            if (BLACKBOX_UART_POLL_ENABLE != 0U) Blackbox_PollUart();
+            if ((BLACKBOX_STATUS_PRINT_ENABLE != 0U) && ((int32_t)(xTaskGetTickCount() - next_status_tick) >= 0))
             {
                 Debug_Printf("[BB] rec=%u sess=%u wr=0x%08lX wrap=%u drop=%lu.\r\n", blackbox_recording ? 1U : 0U, (unsigned int)blackbox_active_session_id, (unsigned long)blackbox_log_write_address, blackbox_log_wrapped ? 1U : 0U, (unsigned long)blackbox_dropped_samples);
                 next_status_tick = (uint32_t)xTaskGetTickCount() + BLACKBOX_STATUS_PRINT_MS;

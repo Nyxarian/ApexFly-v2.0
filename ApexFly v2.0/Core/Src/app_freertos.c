@@ -38,6 +38,7 @@
 #include "mag.h"
 #include "radio.h"
 #include "tof.h"
+#include "serial_echo.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -202,7 +203,18 @@ void MX_FREERTOS_Init(void) {
   tofTaskHandle = osThreadNew(StartTofTask, NULL, &tofTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  /* ⚠️【临时】串口回显任务：USART3 发什么回什么，用于验证上位机串口工具的收发回路。
+     实现见 Modules/De_Bug/serial_echo.c，恢复清单见 优化一下/串口回显测试（临时）.md。
+     优先级 BelowNormal（和 tof/黑匣子同级）：接收靠中断，任务只是慢慢往外发，
+     绝不能放到 High 以上去跟 250Hz 控制环抢 CPU。 */
+  {
+    const osThreadAttr_t serialEchoTask_attributes = {
+      .name = "serialEchoTask",
+      .priority = (osPriority_t) osPriorityBelowNormal,
+      .stack_size = 256 * 4
+    };
+    (void)osThreadNew(SerialEcho_Task, NULL, &serialEchoTask_attributes);
+  }
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */

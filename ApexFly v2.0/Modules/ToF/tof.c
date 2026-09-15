@@ -57,6 +57,11 @@
 #define TOF_WAIT_STEPS 2U
 /* 串口打印周期，单位毫秒。250Hz 的调用方，绝不能每拍都打。 */
 #define TOF_PRINT_PERIOD_MS 500U
+/* ⚠️【临时】串口回显测试期间静音周期打印（[TOF] / [ALT] 两行）。
+   原因：回显测试要的是"发什么回什么"，串口上混着周期日志就分不清哪条是回显。
+   初始化与错误那几条保留（只在启动/异常时出现，正好能看出板子起来了）。
+   测完改回 1U 即可。详见 优化一下/串口回显测试（临时）.md。 */
+#define TOF_PERIODIC_PRINT_ENABLE 0U
 /* 连续多少轮拿不到有效数据才重新初始化（约 0.83 秒，12Hz × 10 轮）。 */
 #define TOF_MISS_REINIT 10U
 
@@ -259,8 +264,8 @@ void ToF_Task(void *argument)
            ——控制环里禁止打印（一行日志约 10ms，会吃掉两拍 4ms 预算），
            所以"谁驱动"和"谁打印"分开：驱动在控制环，打印留在这里。 */
 
-        /* ── 串口打印，按时间节流。 ── */
-        if ((int32_t)(osKernelGetTickCount() - next_print_tick) >= 0)
+        /* ── 串口打印，按时间节流。⚠️ 回显测试期间被 TOF_PERIODIC_PRINT_ENABLE 关掉。 ── */
+        if ((TOF_PERIODIC_PRINT_ENABLE != 0U) && ((int32_t)(osKernelGetTickCount() - next_print_tick) >= 0))
         {
             VerticalEstState_t vertical_state;
             VerticalControlSnapshot_t vertical_control_state;
