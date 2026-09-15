@@ -297,6 +297,22 @@ uint16_t PidTable_GetMaxThrottleUs(void)
     return (uint16_t)(max_throttle_us + 0.5f);
 }
 
+void PidTable_GetAltitudeParams(float *vz_kp, float *vz_ki, float *vz_kd)
+{
+    float kp;
+    float ki;
+    float kd;
+
+    taskENTER_CRITICAL();
+    kp = pid_table.altitude.vz_kp;
+    ki = pid_table.altitude.vz_ki;
+    kd = pid_table.altitude.vz_kd;
+    taskEXIT_CRITICAL();
+    if (vz_kp != NULL) *vz_kp = kp;
+    if (vz_ki != NULL) *vz_ki = ki;
+    if (vz_kd != NULL) *vz_kd = kd;
+}
+
 void PidTable_GetAttitudeTrimDeg(float *roll_trim_deg, float *pitch_trim_deg)
 {
     float roll_trim;

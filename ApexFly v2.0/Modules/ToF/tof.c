@@ -293,9 +293,12 @@ void ToF_Task(void *argument)
                sw/ct=两层门禁位图（全通分别是 0xF）  gnd=停手
                stick=油门杆  rate=杆给的目标变化率  h_sp=目标高度
                gt=停手进入计时（到 500 就进停手）
-               thr=基础油门（µs，H8 的核心观测量）——普通模式跟杆走，定高模式由
-                   vertical_control 给：停手 1000、控制启用 1100 */
-            Debug_Printf("[ALT] req=%u mode=%u st=%u sw=0x%X ct=0x%X gnd=%u stick=%u rate=%+.1f h_sp=%.1f h=%.1f v=%u gt=%lums thr=%u\r\n",
+               vzsp=内环目标垂速（H9 阶段恒 0）  vz=估计垂速
+               corr=内环输出的油门修正量（µs）—— H9 的核心观测量，
+                    **它的符号必须和 vz 相反**（vz>0 时 corr<0），这是负反馈的证据
+               thr=基础油门（µs）= 普通模式跟杆走；定高模式 = 基准 + corr
+                   （停手/门禁未过 1000，控制启用 1250+corr） */
+            Debug_Printf("[ALT] req=%u mode=%u st=%u sw=0x%X ct=0x%X gnd=%u stick=%u rate=%+.1f h_sp=%.1f h=%.1f v=%u gt=%lums vzsp=%+.1f vz=%+.1f corr=%+.1f thr=%u\r\n",
                          (unsigned)vertical_control_state.requested_mode,
                          (unsigned)vertical_control_state.mode,
                          (unsigned)vertical_control_state.state,
@@ -308,6 +311,9 @@ void ToF_Task(void *argument)
                          (double)vertical_control_state.h_est_cm,
                          vertical_control_state.est_valid ? 1U : 0U,
                          (unsigned long)vertical_control_state.ground_timer_ms,
+                         (double)vertical_control_state.vz_sp_cms,
+                         (double)vertical_control_state.vz_est_cms,
+                         (double)vertical_control_state.vz_correction_us,
                          (unsigned)radio_state.throttle_pwm_us);
         }
 

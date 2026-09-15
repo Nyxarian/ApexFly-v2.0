@@ -58,6 +58,19 @@ bool PidTable_ImportSnapshot(const int32_t *values_q10000);
 uint16_t PidTable_GetMaxThrottleUs(void);
 
 /**
+ * @brief 读取定高垂速内环的三个增益（协议 ID 25~27）。
+ *
+ * 这三项在 H9 之前只作为协议 ID 的读写载体存在、不参与任何控制；
+ * H9 把垂速内环接上之后它们才真正生效。**本函数只提供读，不写 PID**——
+ * 谁用谁负责判断"参数变了没有、要不要 Pid_ApplyParams"，因为 ApplyParams 会清积分。
+ *
+ * @param vz_kp 输出，垂速内环比例增益，单位 µs/(cm/s)。可为空。
+ * @param vz_ki 输出，垂速内环积分增益，单位 µs/cm。可为空。
+ * @param vz_kd 输出，垂速内环微分增益。可为空。
+ */
+void PidTable_GetAltitudeParams(float *vz_kp, float *vz_ki, float *vz_kd);
+
+/**
  * @brief 读取横滚、俯仰 Trim，加在跟杆目标角上，单位度。
  * @param roll_trim_deg 横滚 Trim，右倾为正。
  * @param pitch_trim_deg 俯仰 Trim，抬头为正。
