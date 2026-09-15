@@ -42,8 +42,9 @@
 #include "i2c.h"
 #include "radio.h"
 #include "task.h"
+/* vertical_est 不再需要：打印里的 h/vz/v 改成从 vertical_control 的快照读，
+   本任务不再直接碰估计器。 */
 #include "vertical_control.h"
-#include "vertical_est.h"
 #include "vl53l1x.h"
 
 /* 步进周期。 */
@@ -253,66 +254,72 @@ void ToF_Task(void *argument)
 
         tof_snapshot.age_ms = (uint32_t)(osKernelGetTickCount() - last_fresh_tick);
 
-        /* ── 高度/垂速估计器已搬进控制环（H4'）─────────────────────
-           原因：倾斜补偿要用机体系姿态角，而姿态角只有控制环算得出来。
-           本任务不再驱动估计器，只在这里**读**它的状态来打印
-           ——控制环里禁止打印（一行日志约 10ms，会吃掉两拍 4ms 预算），
+        /* ── 本任务只负责**打印**，不驱动任何东西（H4' 起）───────────
+           高度/垂速估计器在控制环里驱动（倾斜补偿要用姿态角，而姿态角只有控制环算得出来）；
+           控制环里**禁止打印**（一行日志约 10ms，会吃掉两拍 4ms 预算）。
            所以"谁驱动"和"谁打印"分开：驱动在控制环，打印留在这里。 */
 
         /* ── 串口打印，按时间节流。 ── */
         if ((int32_t)(osKernelGetTickCount() - next_print_tick) >= 0)
         {
-            VerticalEstState_t vertical_state;
             VerticalControlSnapshot_t vertical_control_state;
             RadioFlightStateSnapshot_t radio_state;
 
             next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
-            VerticalEst_GetState(&vertical_state);
+            /* ⚠️ 估计高度/垂速/有效标志全部从 **vertical_control 的快照**读，
+                  不再单独调 VerticalEst_GetState()。
+               两个理由：① 快照本来就是每拍从估计器转抄的，取一处即一份**同一时刻**的样本，
+                 不会出现 h 与 vz 来自相邻两拍；② 少一次结构拷贝，也少一条跨模块依赖。 */
             VerticalControl_GetSnapshot(&vertical_control_state);
             /* 基础油门从遥测快照读：那是控制环每拍发布的**实际**值（含速率限制之后的），
                普通模式和定高模式都能看到，比从 vertical_control 单独问一个更贴合实际。
                先给 0：万一快照还没发布过（上电早期），打印出来是 0 而不是随机值。 */
             radio_state.throttle_pwm_us = 0U;
             (void)Radio_GetFlightStateSnapshot(&radio_state);
-            Debug_Printf("[TOF] raw=%umm filt=%umm alt=%ldcm status=%u n=%lu fresh=%u age=%lums err=%lu | h=%.1fcm vz=%+.1fcm/s v=%u sc=%lu\r\n",
+
+            /* ── 一行打完整个垂直轴（2026-09-15 起，取代原来的例行 [TOF] + [ALT] 两行）──
+               ⚠️ 注意 `[TOF]` 这个标签**没有消失**：本文件里 `init ok` / `init fail` /
+                  `trigger fail` / `too many misses, re-init` 这些**一次性事件**仍然用它，
+                  那是 ToF 模块自己的故障与状态消息，与被合并掉的例行数据行不是一回事。
+               ⚠️ 为什么要合并：原来两行共约 239 字符，其中 h / vz / v 三个字段是
+                  **同一时刻同一来源打了两遍**（两行都读估计器，取出时刻差一拍，
+                  数值还不一样，反而容易让人怀疑是 bug）。合并后约 123 字符。
+
+               四段，各回答一个问题：
+                 ① 传感器  raw   = ToF 原始距离 mm（估计器的输入）
+                 ② 估计器  h/vz/v= 估计高度 cm / 估计垂速 cm/s / 读数是否可信
+                 ③ 状态机  req/mode = 遥控请求 / 实际模式（两者不等就是"被拒"）
+                           st    = 细分状态：0 普通 / 1 定高在干活 / 4 停手 / 5 已进未使能
+                           sw/ct = 两层门禁位图（全通分别是 0xF）
+                           stick = 油门杆；h_sp = 目标高度 cm；gt = 停手去抖计时 ms
+                 ④ 输出    corr  = 内环修正量 µs —— ⚠️ **符号必须与 vz 相反**
+                                   （vz>0 时 corr<0），这是负反馈的唯一证据
+                           thr   = 基础油门 µs（普通模式跟杆走；定高 = 基准 + corr）
+
+               ⚠️ 2026-09-15 主动删掉的字段（**不是遗漏**，理由都记在这里）：
+                 filt= / alt=    显示用低通值及其换算结果，raw 一个就够；alt 在遥控器上实时可见
+                 status= / fresh= / age= / err=
+                                 ToF 健康度。⚠️ **删了就没有第二个出口**——黑匣子不记这些。
+                                 将来排查"v 掉到 0 是超量程还是 ToF 挂了"时，必须把这几项加回来，
+                                 或者从 git 历史取删之前那一版
+                 n= / sc=        ToF 与估计器的累计样本数，被 fresh+age 覆盖
+                 gnd=            **与 st=4 完全等价**（代码三条分支恒等）
+                 rate=           由 stick 唯一决定（三段映射是纯函数）
+                 vzsp=           H9 阶段恒 0；**H13 接外环时要加回来**
+                 h= / v= / vz=（旧 [ALT] 那三个）与②段完全重复 */
+            Debug_Printf("[V] raw=%umm | h=%.1fcm vz=%+.1fcm/s v=%u | req=%u mode=%u st=%u sw=0x%X ct=0x%X stick=%u h_sp=%.1f gt=%lums | corr=%+.1f thr=%u\r\n",
                          (unsigned)tof_snapshot.distance_raw_mm,
-                         (unsigned)tof_snapshot.distance_filtered_mm,
-                         (long)tof_snapshot.altitude_cm,
-                         (unsigned)tof_snapshot.range_status,
-                         (unsigned long)tof_snapshot.valid_count,
-                         tof_snapshot.fresh ? 1U : 0U,
-                         (unsigned long)tof_snapshot.age_ms,
-                         (unsigned long)tof_snapshot.error_count,
-                         (double)vertical_state.height_cm,
-                         (double)vertical_state.vz_cms,
-                         vertical_state.valid ? 1U : 0U,
-                         (unsigned long)vertical_state.sample_count);
-            /* 定高的模式 / 门禁 / 停手（H6）。单独一行，不并进 [TOF]：
-               两行加起来会顶到 384 字节的格式化缓冲区上限。
-               req=遥控请求  mode=实际模式  st=细分状态
-               sw/ct=两层门禁位图（全通分别是 0xF）  gnd=停手
-               stick=油门杆  rate=杆给的目标变化率  h_sp=目标高度
-               gt=停手进入计时（到 500 就进停手）
-               vzsp=内环目标垂速（H9 阶段恒 0）  vz=估计垂速
-               corr=内环输出的油门修正量（µs）—— H9 的核心观测量，
-                    **它的符号必须和 vz 相反**（vz>0 时 corr<0），这是负反馈的证据
-               thr=基础油门（µs）= 普通模式跟杆走；定高模式 = 基准 + corr
-                   （停手/门禁未过 1000，控制启用 1250+corr） */
-            Debug_Printf("[ALT] req=%u mode=%u st=%u sw=0x%X ct=0x%X gnd=%u stick=%u rate=%+.1f h_sp=%.1f h=%.1f v=%u gt=%lums vzsp=%+.1f vz=%+.1f corr=%+.1f thr=%u\r\n",
+                         (double)vertical_control_state.h_est_cm,
+                         (double)vertical_control_state.vz_est_cms,
+                         vertical_control_state.est_valid ? 1U : 0U,
                          (unsigned)vertical_control_state.requested_mode,
                          (unsigned)vertical_control_state.mode,
                          (unsigned)vertical_control_state.state,
                          (unsigned)vertical_control_state.switch_gates,
                          (unsigned)vertical_control_state.control_gates,
-                         vertical_control_state.grounded ? 1U : 0U,
                          (unsigned)vertical_control_state.stick,
-                         (double)vertical_control_state.stick_rate_cms,
                          (double)vertical_control_state.h_sp_cm,
-                         (double)vertical_control_state.h_est_cm,
-                         vertical_control_state.est_valid ? 1U : 0U,
                          (unsigned long)vertical_control_state.ground_timer_ms,
-                         (double)vertical_control_state.vz_sp_cms,
-                         (double)vertical_control_state.vz_est_cms,
                          (double)vertical_control_state.vz_correction_us,
                          (unsigned)radio_state.throttle_pwm_us);
         }
