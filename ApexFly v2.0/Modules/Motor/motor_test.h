@@ -31,14 +31,6 @@ void MotorTest_Task(void *argument);
  */
 void MotorTest_NotifyImuDrdyFromISR(void);
 
-/**
- * @brief 【临时探针，H4' 验证完删除】取控制环单拍耗时峰值，单位微秒，读走即清零。
- *
- * 每次调用返回"上次调用以来"的最大单拍耗时。一拍预算约 4008us。
- * 由 tofTask 在打印里调用（控制环本身禁止打印）。
- */
-uint32_t MotorTest_TakeMaxFrameUs(void);
-
 #ifdef __cplusplus
 }
 #endif

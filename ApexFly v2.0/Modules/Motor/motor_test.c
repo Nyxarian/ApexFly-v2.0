@@ -99,19 +99,6 @@ static SemaphoreHandle_t imu_drdy_semaphore;
    漏掉第 ③ 处会导致解锁瞬间从上一轮的残留值开始爬升。 */
 static float throttle_slew_us = (float)MOTOR_PWM_MIN_US;
 
-/* ── 临时探针：控制环单拍耗时峰值（H4' 验证用，验完连函数一起删）──────────
-   量的是"这一拍自己干了多少活"：从等到 DRDY 起，到本拍最后发布遥测为止。
-   一拍预算约 4008us（250Hz）；一旦逼近这个数，说明开始吃下一拍的 DRDY 了。
-   正常值应该远小于它——估计器只做一次结构体拷贝和几次浮点，理论上增加不到 2us。 */
-static uint32_t motor_test_max_frame_us;
-
-uint32_t MotorTest_TakeMaxFrameUs(void)
-{
-    uint32_t value = motor_test_max_frame_us;
-    motor_test_max_frame_us = 0U;    /* 读走即清零：每次打印看到的是"上次打印以来"的峰值 */
-    return value;
-}
-
 /**
  * @brief IMU 数据就绪中断回调，由 EXTI0 的 HAL_GPIO_EXTI_Callback 调用。
  *
@@ -305,7 +292,6 @@ void MotorTest_Task(void *argument)
     uint32_t next_battery_tick;
     uint32_t imu_cycles;
     uint32_t dt_us;
-    uint32_t frame_us;
     uint32_t blackbox_sample_divider;
     uint32_t i2c_fail_streak;
     float control_dt_s;
@@ -513,16 +499,34 @@ void MotorTest_Task(void *argument)
                 {
                     Blackbox_NotifyArmed();
                 }
-                /* 油门杆先映射成基础推力（映射本身与改动前一致），再经速率限制，不经过垂速环。
+                /* ── 基础油门按模式分叉（H8）───────────────────────────
+                   普通模式：油门杆直通油门，与本环节之前**一个字节都没改**。
+                   定高模式：油门杆已经被 vertical_control 拿去积分目标高度 h_sp 了，
+                             基础油门改由它按状态给出（停手 / 门禁②没过 → 1000µs，
+                             控制启用 → 1100µs 占位）。
+                   ⚠️ 用 `vertical_control_state.mode`（实际生效的模式）判断，不是遥控请求：
+                      请求被拒时请求是 1、实际是 0，按请求分叉会让普通模式误走定高那条路。
+                   速率限制器**不绕过**：它把"停手 ↔ 控制"变成软启动/软收油
+                   （1000→1100 约 0.13s，反向约 0.33s）。
+                   ⚠️ 但"上锁"那一步仍然是把油门直接赋值成 1000 的**硬台阶**——那是改动前
+                      就有的行为，本环节没有引入、也没有去掉。
                    速率不对称：上升 800、下降 300 us/s。
                    状态回喂的是限速后的【浮点值】，不是取整后的整数——若回喂整数，
                    每拍丢弃小数会系统性吃掉速率（实测 800->750、300->250）。 */
                 mag_heading_cdeg = MotorTest_MagHeadingCdeg(&mag_calibration_valid);
                 PidTable_GetAttitudeTrimDeg(&roll_trim_deg, &pitch_trim_deg);
-                throttle_target_us = MotorTest_MapStickToThrottleUs(link.command.throttle);
+                if (vertical_control_state.mode == (uint8_t)VERTICAL_MODE_ALT_HOLD)
+                {
+                    throttle_target_us = VerticalControl_GetThrottleUs();
+                }
+                else
+                {
+                    throttle_target_us = MotorTest_MapStickToThrottleUs(link.command.throttle);
+                }
                 throttle_slew_us = MotorTest_ThrottleRampLimit(throttle_slew_us, (float)throttle_target_us, control_dt_s);
                 throttle_us = (uint16_t)(throttle_slew_us + 0.5f);
-                /* 低油门先保持四路等值，避免地面姿态误差让单路电机提前抬升。 */
+                /* 低油门先保持四路等值，避免地面姿态误差让单路电机提前抬升。
+                   ⚠️ 定高模式下 1100µs 也走这一支（判据含等号），所以本阶段定高没有姿态修正。 */
                 if (throttle_us <= MOTOR_ATTITUDE_ENABLE_PWM_US)
                 {
                     AttitudeControl_Reset();
@@ -595,11 +599,6 @@ void MotorTest_Task(void *argument)
             /* 遥测回显**实际生效**的模式，不是遥控请求的模式：
                定高因为故障自动退出时，遥控器上要立刻看到模式变回去，飞行员才有明确反馈。 */
             Radio_PublishFlightMode(vertical_control_state.telemetry_mode);
-
-            /* 临时探针：本拍耗时（从 imu_cycles 记的"等 DRDY 之后"到这里）。
-               验完连 motor_test_max_frame_us、MotorTest_TakeMaxFrameUs 一起删。 */
-            frame_us = (uint32_t)(DWT->CYCCNT - imu_cycles) / (SystemCoreClock / 1000000U);
-            if (frame_us > motor_test_max_frame_us) motor_test_max_frame_us = frame_us;
         }
     }
 }

@@ -40,7 +40,7 @@
 #include "cmsis_os.h"
 #include "debug.h"
 #include "i2c.h"
-#include "motor_test.h"
+#include "radio.h"
 #include "task.h"
 #include "vertical_control.h"
 #include "vertical_est.h"
@@ -264,11 +264,17 @@ void ToF_Task(void *argument)
         {
             VerticalEstState_t vertical_state;
             VerticalControlSnapshot_t vertical_control_state;
+            RadioFlightStateSnapshot_t radio_state;
 
             next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
             VerticalEst_GetState(&vertical_state);
             VerticalControl_GetSnapshot(&vertical_control_state);
-            Debug_Printf("[TOF] raw=%umm filt=%umm alt=%ldcm status=%u n=%lu fresh=%u age=%lums err=%lu | h=%.1fcm vz=%+.1fcm/s v=%u sc=%lu | loop=%luus\r\n",
+            /* 基础油门从遥测快照读：那是控制环每拍发布的**实际**值（含速率限制之后的），
+               普通模式和定高模式都能看到，比从 vertical_control 单独问一个更贴合实际。
+               先给 0：万一快照还没发布过（上电早期），打印出来是 0 而不是随机值。 */
+            radio_state.throttle_pwm_us = 0U;
+            (void)Radio_GetFlightStateSnapshot(&radio_state);
+            Debug_Printf("[TOF] raw=%umm filt=%umm alt=%ldcm status=%u n=%lu fresh=%u age=%lums err=%lu | h=%.1fcm vz=%+.1fcm/s v=%u sc=%lu\r\n",
                          (unsigned)tof_snapshot.distance_raw_mm,
                          (unsigned)tof_snapshot.distance_filtered_mm,
                          (long)tof_snapshot.altitude_cm,
@@ -280,15 +286,16 @@ void ToF_Task(void *argument)
                          (double)vertical_state.height_cm,
                          (double)vertical_state.vz_cms,
                          vertical_state.valid ? 1U : 0U,
-                         (unsigned long)vertical_state.sample_count,
-                         (unsigned long)MotorTest_TakeMaxFrameUs());
+                         (unsigned long)vertical_state.sample_count);
             /* 定高的模式 / 门禁 / 停手（H6）。单独一行，不并进 [TOF]：
                两行加起来会顶到 384 字节的格式化缓冲区上限。
                req=遥控请求  mode=实际模式  st=细分状态
                sw/ct=两层门禁位图（全通分别是 0xF）  gnd=停手
                stick=油门杆  rate=杆给的目标变化率  h_sp=目标高度
-               gt=停手进入计时（到 500 就进停手） */
-            Debug_Printf("[ALT] req=%u mode=%u st=%u sw=0x%X ct=0x%X gnd=%u stick=%u rate=%+.1f h_sp=%.1f h=%.1f v=%u gt=%lums\r\n",
+               gt=停手进入计时（到 500 就进停手）
+               thr=基础油门（µs，H8 的核心观测量）——普通模式跟杆走，定高模式由
+                   vertical_control 给：停手 1000、控制启用 1100 */
+            Debug_Printf("[ALT] req=%u mode=%u st=%u sw=0x%X ct=0x%X gnd=%u stick=%u rate=%+.1f h_sp=%.1f h=%.1f v=%u gt=%lums thr=%u\r\n",
                          (unsigned)vertical_control_state.requested_mode,
                          (unsigned)vertical_control_state.mode,
                          (unsigned)vertical_control_state.state,
@@ -300,7 +307,8 @@ void ToF_Task(void *argument)
                          (double)vertical_control_state.h_sp_cm,
                          (double)vertical_control_state.h_est_cm,
                          vertical_control_state.est_valid ? 1U : 0U,
-                         (unsigned long)vertical_control_state.ground_timer_ms);
+                         (unsigned long)vertical_control_state.ground_timer_ms,
+                         (unsigned)radio_state.throttle_pwm_us);
         }
 
         /* 每步都让出 CPU：本任务与 magtask 共用 I2C2。 */
