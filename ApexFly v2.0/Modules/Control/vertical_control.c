@@ -5,11 +5,11 @@
  * ── 本文件做什么、不做什么 ────────────────────────────────────
  * 做：模式切换门禁（门禁①）、控制启用门禁（门禁②）、油门杆三段映射、
  *     h_sp 积分、停手（地面待机）状态、定高模式下的基础油门（H8 起）、
- *     **垂速内环 P**（H9 起）。
- * 不做：不写电机、不打印、不做外环（H13）、不做内环积分（H10）、不做退出判据（H12）。
+ *     垂速内环 P（H9 起）、**悬停油门估计器（H10 起）**。
+ * 不做：不写电机、不打印、不做外环（H13）、不做退出判据（H12）。
  *
  * ── 垂速内环（H9）───────────────────────────────────────────
- * 控制律 ∆µs = Kp_v × (vz_sp − vz_est)，本阶段只有 P（Ki/Kd 走参数表，默认 0）。
+ * 快层控制律 ∆µs = Kp_v × (vz_sp − vz_est)，本阶段只有 P（Ki/Kd 走参数表，默认 0）。
  * `vz_sp` **固定 0**（VERTICAL_INNER_VZ_SP_CMS），含义是"把垂速压到 0"：
  *   飞机被抬起来（vz>0）→ 减油门；被压下去（vz<0）→ 加油门。一个纯阻尼器。
  *
@@ -22,6 +22,28 @@
  *    ⇒ 参数顺序写反（`Pid_Update(&pid, vz_est, 0.0f, dt)`）就是正反馈，
  *      现象是"飞机被抬起来就一直往上飞"。台架验收的 ⑤⑥ 两条专门抓这个，
  *      而这是**唯一会真正导致失控**的错误，所以它排在整个环节的第一位。
+ *    这个"减号"在 H9 已实测通过（强信号 85/85 反号、等效 Kp 19.9）。
+ *
+ * ── 悬停油门估计器（H10）──────────────────────────────────────
+ * ⭐⭐ 定高模式的基础油门是**两层之和**（见 vertical_control.h 的常量段）：
+ *      慢层 = 积分器（本文件的 `vertical_throttle_base_us`），回答"悬停要多少油门"
+ *      快层 = 上面的垂速内环 P，回答"此刻要加还是减"
+ *    为什么慢层必须手写、不能直接用 `Pid_t` 的内部积分：
+ *      `pid.c` 的积分钳位是**对称的**（±i_limit），而我们要的区间
+ *      [1150, 1650] 相对 0 是**不对称**的。硬套只能玩"把积分当偏移、中心挪到 1400"，
+ *      可读性差、以后必被改错。⇒ 拆成两个部件，各自职责单一。
+ *    ⚠️⚠️ 因此 `vertical_inner_pid` 的 **ki 必须传 0**（RefreshInnerParams 里写死），
+ *       让 `pid.c` 的内部积分永不运行。否则**两个积分器会打架**：
+ *       一个在 [1150,1650] 上累加绝对油门，另一个在 ±50 上累加修正量，
+ *       表现是积分行为不可预测。这是本环节最容易被后人改错的一处。
+ *
+ * 慢层的三个动作（全部必须显式做，漏一个就是 bug）：
+ *   ① 每拍（仅在控制启用时）按 error = vz_sp − vz_est 累加，再钳 [1150, 1650]；
+ *   ② 不活跃（普通模式 / 停手 / 门禁②没过）时**回初值 1250**，不留残值；
+ *   ③ 模式切换（Reset）时回初值 1250。
+ *   ⚠️ ② 的后果要记住：飞行中门禁瞬时失效会**丢掉已经学到的悬停油门**。
+ *      现在这不成问题，因为那时油门本来就被压到 1000（= 空中停车，见待办 5），
+ *      两者都是 H12 要一起修掉的。台架（拆桨）上风险为零。
  *
  * ── 基础油门为什么要由本模块出（H8）────────────────────────────
  * 定高模式下油门杆已经被"三段映射 → h_sp"占用了。若不接管基础油门，
@@ -33,21 +55,24 @@
  * 混成一层会自相矛盾——"要求已解锁才能切换"和"切换必须在地面"打架。
  *
  * ── 每拍的执行顺序（就是下面 Update 里的顺序，不要重排）────────
- *   ⓪ 刷新内环参数与限幅（H9）
+ *   ⓪ 刷新内环参数（H9）
  *   → ① 读估计器 → ② 填杆量与请求 → ③ 算门禁① → ④ 切换（可能复位）
  *   → ⑤ 积分 h_sp → ⑥ 停手判定 → ⑦ 算门禁② → ⑧ 定状态
- *   → ⑨ 垂速内环（H9） → ⑩ 遥测字节
+ *   → ⑨ 垂速内环快层 + 悬停油门慢层（H9/H10） → ⑩ 遥测字节
  * ⑤ 必须在 ④ 之后：切换时复位出来的 h_sp 是这一拍积分的起点。
  * ⑦ 必须在 ⑥ 之后：门禁②里有一位就是"不处于停手"。
- * ⑨ 必须在 ⑧ 之后：内环只在"门禁②全通且不在停手"时才动，而那两件事正是 ⑥⑦⑧ 算出来的。
+ * ⑨ 必须在 ⑧ 之后：两层都只在"门禁②全通且不在停手"时才动，
+ *    而那两件事正是 ⑥⑦⑧ 算出来的。
  */
 
 #include "vertical_control.h"
 
-/* 基础油门的两个取值来源。方向是 Control → Motor/Mixer，和 motor_test.c 引用本模块
-   的方向相反但不冲突：这里只需要两个常量，不需要任何电机状态。
-   pid / pid_table 同属 Control 层，方向一致，不引入新的跨层依赖。 */
-#include "mixer.h"
+/* 基础油门要用到"电机停转"这个值。方向是 Control → Motor，和 motor_test.c
+   引用本模块的方向相反但不冲突：这里只需要一个常量，不需要任何电机状态。
+   pid / pid_table 同属 Control 层，方向一致，不引入新的跨层依赖。
+   ⚠️ H10 起**不再 include mixer.h**：地板/天花板已经改成本模块自己的常量
+      （VERTICAL_CONTROL_THROTTLE_MIN/MAX_US），不再需要读混控有效下限。
+      那两个常量本身已经保证了"永远不碰到 1100"，理由写在 vertical_control.h 里。 */
 #include "motor.h"
 #include "pid.h"
 #include "pid_table.h"
@@ -74,17 +99,24 @@ static bool vertical_takeoff_guard;
    （而且 H13 的外环有 2cm 死区和 ±20cm/s 钳位，CascadePid 装不下，届时本来就要重排。） */
 static Pid_t vertical_inner_pid;
 
+/* ── 悬停油门估计器（H10）：慢层 ────────────────────────────────
+   它**不是** PID 的积分项，而是手写的一阶累加器，单位微秒，直接表示"当前认为的
+   悬停所需基础油门"。为什么手写：`pid.c` 的积分钳位是对称的，装不下
+   [1150, 1650] 这种相对 0 不对称的区间。详见文件头。
+   只在本模块内部读写，不跨模块暴露（打印走快照里的 vz_throttle_base_us）。 */
+static float vertical_throttle_base_us;
+
 /* 参数缓存：每拍读参数表，**只有真的变了才 Pid_ApplyParams**。
-   为什么要缓存：Pid_ApplyParams 内部会清积分。H10 打开 Ki 之后，
-   每拍无脑 Apply 会把积分器永远按在 0 上（= 悬停油门学习器直接失效）。
-   ⚠️ 满杆油门上限也必须进缓存：它决定动态限幅，用户只改它而不改三个增益时，
-      只比较增益会漏掉"限幅该重算"这件事。
+   为什么要缓存：Pid_ApplyParams 内部会清积分与微分历史。
+   ⚠️ 高度环的慢层积分器（vertical_throttle_base_us）**不受它影响**——
+      那是刻意的：遥控改 `vz_kp` 不该把已经学到的悬停油门估计丢掉。
+   ⚠️ 不再缓存 `max_throttle_us`：H9 的动态限幅在 H10 已被常量区间取代，
+      那个参数与本模块再无关系（它只影响普通模式的满杆油门）。
    ⚠️ 遥控在解锁中禁止改参（PidTable_HandleCommand 的既有约束），
       所以这个"变了"只会在台架上发生，空中不会因为调参而清积分。 */
 static float vertical_inner_kp;
 static float vertical_inner_ki;
 static float vertical_inner_kd;
-static uint16_t vertical_inner_max_throttle_us;
 static bool vertical_inner_params_valid;
 
 /**
@@ -217,60 +249,41 @@ static bool VerticalControl_IsActive(void)
 }
 
 /**
- * @brief 每拍刷新内环参数与动态限幅（H9），参数没变就直接返回。
+ * @brief 每拍刷新快层参数（H9），参数没变就直接返回。
  *
- * ── 为什么限幅是"动态"的 ──────────────────────────────────────
- * 修正量的可用范围取决于**当前基准油门**和**满杆油门上限**，两者都是遥控可改的参数：
- *     向上：满杆上限 − 基准 − 姿态保留余量
- *           （混控在基础油门贴上限时会统一缩放三轴修正，被牺牲的永远是姿态）
- *     向下：混控有效下限 − 基准
- *           （**绝不能碰到 1100**：那会让 motor_test 的四路等值分支命中，
- *             姿态环被旁路并 AttitudeControl_Reset()）
- * 算出来的两个值再与硬限幅 VERTICAL_INNER_CORR_LIMIT_US 取小。
+ * ── H10 起这里不再算"动态限幅" ─────────────────────────────────
+ * H9 时快层的限幅是从"基准油门 + 满杆上限 + 姿态余量"推导出来的动态值；
+ * H10 把慢层（积分器）拿来之后，那个推导失去了意义——因为"基准"本身
+ * 已经变成会自己走的积分器了，拿它去算一个静态限幅没有物理含义。
+ * 现在限幅就是一个常量 ±VERTICAL_INNER_CORR_LIMIT_US（= 50µs），
+ * **整个油门权限由 [地板, 天花板] 这一对常量负责**（见 GetThrottleUs）。
  *
- * 参数表默认（满杆 1500）时：(1500 − 1250 − 100) = +150 → 取小 → **+30**
- *                            (1100 − 1250)       = −150 → 取小 → **−30**
- * ⇒ 对称的 ±30，正好让 H9 的"该减油门时减"也验得了（这正是基准必须 > 1100 的原因）。
+ * ⚠️⚠️ `ki` 读出来但**传给 Pid_ApplyParams 的是 0**：
+ *    参数表里的 `vz_ki` 驱动的是本文件手写的慢层积分器（见 Update 的 ⑨），
+ *    不是 `Pid_t` 的内部积分。两个积分器同时跑会打架，所以这里必须写 0。
+ *    这行是"看起来像笔误、实际是刻意"的典型，改之前先读文件头。
  */
 static void VerticalControl_RefreshInnerParams(void)
 {
     float kp;
     float ki;
     float kd;
-    float out_max;
-    float out_min;
-    uint16_t max_throttle_us;
 
     PidTable_GetAltitudeParams(&kp, &ki, &kd);
-    max_throttle_us = PidTable_GetMaxThrottleUs();
 
     if (vertical_inner_params_valid &&
-        (kp == vertical_inner_kp) && (ki == vertical_inner_ki) && (kd == vertical_inner_kd) &&
-        (max_throttle_us == vertical_inner_max_throttle_us))
+        (kp == vertical_inner_kp) && (ki == vertical_inner_ki) && (kd == vertical_inner_kd))
     {
         return;
     }
 
-    out_max = (float)max_throttle_us - (float)VERTICAL_BASE_PWM_US - VERTICAL_ATTITUDE_RESERVE_US;
-    if (out_max > VERTICAL_INNER_CORR_LIMIT_US) out_max = VERTICAL_INNER_CORR_LIMIT_US;
-    /* 满杆上限低于"基准 + 余量"时**不给**向上的权限（0），而不是给一个负的上限：
-       负的上限会让 Pid_Update 的夹取逻辑反过来把输出推到负值去。 */
-    if (out_max < 0.0f) out_max = 0.0f;
-
-    out_min = (float)MIXER_PWM_EFFECTIVE_MIN_US - (float)VERTICAL_BASE_PWM_US;
-    if (out_min > 0.0f) out_min = 0.0f;
-    if (out_min < -VERTICAL_INNER_CORR_LIMIT_US) out_min = -VERTICAL_INNER_CORR_LIMIT_US;
-
-    /* 积分限幅按**向上余量**的比例推导，沿用 attitude_control 的既有约定
-       （"改输出限幅连带改积分限幅"是刻意避免的，见 attitude_control.h:41-47）。
-       用向上余量而不是对称限幅：积分是用来补推力的，真正的约束在向上那一侧。
-       H9 阶段 Ki=0，本值暂不起作用；放在这里是为了 H10 不用再动限幅语义。 */
-    Pid_ApplyParams(&vertical_inner_pid, kp, ki, kd, out_max * VERTICAL_INNER_I_LIMIT_RATIO, out_max, out_min);
+    /* ki 传 0：慢层由本文件自己积分，不能用 PID 的内部积分。详见函数注释。 */
+    Pid_ApplyParams(&vertical_inner_pid, kp, 0.0f, kd, 0.0f,
+                    VERTICAL_INNER_CORR_LIMIT_US, -VERTICAL_INNER_CORR_LIMIT_US);
 
     vertical_inner_kp = kp;
     vertical_inner_ki = ki;
     vertical_inner_kd = kd;
-    vertical_inner_max_throttle_us = max_throttle_us;
     vertical_inner_params_valid = true;
 }
 
@@ -282,12 +295,15 @@ void VerticalControl_Init(void)
     vertical_snapshot.h_sp_cm = VERTICAL_H_SP_MIN_CM;
     vertical_takeoff_guard = false;
 
+    /* 慢层积分器回初值。上电时我们不知道悬停要多少油门，只能从"台架观测基准"起步。 */
+    vertical_throttle_base_us = VERTICAL_THROTTLE_START_US;
+    vertical_snapshot.vz_throttle_base_us = VERTICAL_THROTTLE_START_US;
+
     /* 内环先给一组"输出恒 0"的合法初值，再立刻去读真实参数。
        万一读的时候参数表还没初始化（现在不会：motor_test.c 里 PidTable_Init 在前），
        这一组零值让内环表现成"什么都不做"，而不是拿未初始化的限幅去驱动电机。
        参数表就绪后，下一拍 RefreshInnerParams 会因为缓存不匹配而自动重新应用。 */
     Pid_Init(&vertical_inner_pid, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
-    vertical_inner_max_throttle_us = 0U;
     vertical_inner_params_valid = false;
     VerticalControl_RefreshInnerParams();
 
@@ -304,11 +320,14 @@ void VerticalControl_Reset(void)
        否则紧接着的停手判定会被它挡住。 */
     vertical_takeoff_guard = false;
     /* 内环也要复位：模式切换是"从零开始"，积分和微分历史都不能留
-       （H10 打开 Ki 之后，留着旧积分等于带着上一轮的悬停油门估计值进新一次飞行）。
+       （H10 打开慢层之后，留着旧积分等于带着上一轮的悬停油门估计值进新一次飞行，
+        而两次飞行的重量/电压可能不同）。
        ⚠️ 只清运行状态，不重读参数——参数没变就没必要 ApplyParams。 */
     Pid_Reset(&vertical_inner_pid);
+    vertical_throttle_base_us = VERTICAL_THROTTLE_START_US;
     vertical_snapshot.vz_sp_cms = 0.0f;
     vertical_snapshot.vz_correction_us = 0.0f;
+    vertical_snapshot.vz_throttle_base_us = VERTICAL_THROTTLE_START_US;
     /* mode 不动：本函数也会在"模式切换成功"时被调用，那时新模式已经写进去了。
        杆量、门禁位图每拍都会被覆盖，不需要清。 */
 }
@@ -458,12 +477,13 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
         vertical_snapshot.state = (uint8_t)VERTICAL_STATE_IDLE;
     }
 
-    /* ⑨ 垂速内环（H9）。⚠️ 必须在 ⑧ 之后：它只在"门禁②全通且不在停手"时才动，
+    /* ⑨ 垂速内环（H9）+ 悬停油门估计器（H10）。
+       ⚠️ 必须在 ⑧ 之后：两层都只在"门禁②全通且不在停手"时才动，
           而那两件事正是 ⑥⑦⑧ 算出来的。
-          不满足就**复位并输出 0**，不是"保持上一拍"：
+          不满足就**复位**（慢层回初值、快层输出 0），不是"保持上一拍"：
           ① 停手时控制器必须什么都不做，包括不留残值；
-          ② "保持上一拍"是 H12 要做的事（空中门禁失效时保住悬停油门），
-             那需要内环积分器存在（H10）才有东西可保持，现在没有，所以宁可闭嘴。 */
+          ② "门禁失效时保住悬停油门"是 H12 要做的事。现在已经有东西可以保住了
+             （慢层积分器就是那个稳定偏置），但那需要锁存逻辑，属 H12 的范围。 */
     if (VerticalControl_IsActive())
     {
         /* ⚠️⚠️ 参数顺序**绝对不能反**：Pid_Update(pid, setpoint, measured, dt)
@@ -471,15 +491,44 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
               **这个减号就是整个回路里唯一的反号**，也就是负反馈的全部来源。
               写成 `Pid_Update(&vertical_inner_pid, vertical_snapshot.vz_est_cms, 0.0f, dt_s)`
               就是正反馈：飞机被抬起来反而加油门，会一直往上飞。
-              编译器不会报错，静态检查也查不出来 —— 这是 H9 台架验收 ⑤⑥ 存在的全部理由。 */
+              编译器不会报错，静态检查也查不出来 —— 这是 H9 台架验收 ⑤⑥ 存在的全部理由，
+              H9 已实测通过（强信号 85/85 反号）。 */
         vertical_snapshot.vz_sp_cms = VERTICAL_INNER_VZ_SP_CMS;
         vertical_snapshot.vz_correction_us = Pid_Update(&vertical_inner_pid, VERTICAL_INNER_VZ_SP_CMS, vertical_snapshot.vz_est_cms, dt_s);
+
+        /* ── 慢层：悬停油门估计器 ────────────────────────────────
+           与快层**用同一个误差、同一个符号约定**（这是刻意的，两层的方向必须一致）：
+             飞机上升（vz>0）→ error<0 → 积分下降 → 少给油 → 把它压回去；
+             飞机下沉（vz<0）→ error>0 → 积分上升 → 多给油 → 把它托起来。
+           ⚠️ 这个减号写反就是正反馈，性质与快层那个减号完全相同，也会导致失控。
+              台架验收的 ⑥⑦ 两条专门抓它（匀速上抬 → i 必须往下降）。
+           ⚠️ dt_s 用与 Pid_Update **完全相同**的有效性判据（[0.5ms, 100ms]）：
+              断拍/任务阻塞后一个巨大的 dt 会把积分一次推出去很远。
+              pid.c 里遇到这种 dt 是"本拍不动作"，这里照做，行为才一致。
+           ⚠️ ki == 0 时完全不积分（与 pid.c 的 `if (pid->ki != 0.0f)` 一致），
+              这样遥控把 vz_ki 调成 0 就等价于"冻结悬停油门估计"，便于台架取证。 */
+        if ((dt_s >= 0.0005f) && (dt_s <= 0.10f) && (vertical_inner_ki != 0.0f))
+        {
+            vertical_throttle_base_us += (VERTICAL_INNER_VZ_SP_CMS - vertical_snapshot.vz_est_cms) * vertical_inner_ki * dt_s;
+        }
+
+        /* ⭐ 积分的钳位，与最终输出的钳位是**同一对数字**（见头文件的常量段）。
+           只钳输出不钳积分 = windup：积分偷偷涨到几千而表面看不出来，
+           表现成"长期死死顶在天花板"，一旦条件变化立刻猛冲。 */
+        if (vertical_throttle_base_us < VERTICAL_CONTROL_THROTTLE_MIN_US) vertical_throttle_base_us = VERTICAL_CONTROL_THROTTLE_MIN_US;
+        if (vertical_throttle_base_us > VERTICAL_CONTROL_THROTTLE_MAX_US) vertical_throttle_base_us = VERTICAL_CONTROL_THROTTLE_MAX_US;
+        vertical_snapshot.vz_throttle_base_us = vertical_throttle_base_us;
     }
     else
     {
         vertical_snapshot.vz_sp_cms = 0.0f;
         vertical_snapshot.vz_correction_us = 0.0f;
         Pid_Reset(&vertical_inner_pid);
+        /* 慢层回初值。⚠️ 后果：飞行中门禁瞬时失效会丢掉已学到的悬停油门。
+           现在不成问题（那时油门本来就被压到 1000 = 空中停车，见待办 5），
+           两者都是 H12 要一起修的。拆桨台架上风险为零。 */
+        vertical_throttle_base_us = VERTICAL_THROTTLE_START_US;
+        vertical_snapshot.vz_throttle_base_us = VERTICAL_THROTTLE_START_US;
     }
 
     /* ⑩ 遥测字节：实际模式；请求与实际不一致就在最高位标一下，
@@ -514,14 +563,23 @@ uint16_t VerticalControl_GetThrottleUs(void)
         return MOTOR_PWM_MIN_US;
     }
 
-    /* 控制启用（st=1）：**基准油门 + 垂速内环修正量**（H8 的占位值在 H9 被这段取代）。
-       ⚠️ 修正量已经在 VerticalControl_RefreshInnerParams() 算出的 [out_min, out_max]
-          内限幅过，这里不再夹取。但 out_min 的来源保证了结果**永远不会碰到
-          混控有效下限 1100**（见 VERTICAL_BASE_PWM_US 的三条理由），
-          否则 motor_test 的"四路等值"分支会命中，姿态环被旁路并 Reset。
-       ⚠️ dt_s 不合理时 Pid_Update 返回 0，于是这里退化成"只给基准油门"——
-          这是刻意的安全侧回退：断拍时保持一个已知安全的推力，而不是冲出去。 */
-    throttle_us = (float)VERTICAL_BASE_PWM_US + vertical_snapshot.vz_correction_us;
+    /* 控制启用（st=1）：**慢层积分器 + 快层修正量**，再整体钳到 [地板, 天花板]。
+       （H8 的占位常数在 H9 被"固定基准 + 修正量"取代，H10 再把基准换成积分器。）
+
+       ── 为什么这里还要再夹一次 ──────────────────────────────────
+       慢层自己已经钳在 [1150, 1650]、快层已钳在 ±50，但**两者之和**可以到
+       [1100, 1700]。所以这一层夹取不是冗余，是真正决定"电脑能动用的油门范围"的那一道。
+       ⚠️ 它与慢层的钳位是**同一对常量**：改其中一个必须同时想清楚另一个。
+          只钳这里不钳慢层 = windup（积分偷偷涨到几千，表面顶在天花板，条件一变就猛冲）。
+
+       ⚠️ 地板 1150 > 混控有效下限 1100，所以结果**永远不会命中** `motor_test.c` 的
+          "四路等值 + AttitudeControl_Reset()"分支，姿态环在定高模式下始终有效。
+       ⚠️ dt_s 不合理时 Pid_Update 返回 0、慢层也不积分，于是这里退化成
+          "保持上一拍的悬停油门估计" —— 这是刻意的安全侧回退：断拍时保持一个
+          已知能悬停的推力，而不是掉到最小值（那等于空中停车）。 */
+    throttle_us = vertical_throttle_base_us + vertical_snapshot.vz_correction_us;
+    if (throttle_us < VERTICAL_CONTROL_THROTTLE_MIN_US) throttle_us = VERTICAL_CONTROL_THROTTLE_MIN_US;
+    if (throttle_us > VERTICAL_CONTROL_THROTTLE_MAX_US) throttle_us = VERTICAL_CONTROL_THROTTLE_MAX_US;
     return (uint16_t)(throttle_us + 0.5f);
 }
 

@@ -529,9 +529,10 @@ void MotorTest_Task(void *argument)
                 throttle_us = (uint16_t)(throttle_slew_us + 0.5f);
                 /* 低油门先保持四路等值，避免地面姿态误差让单路电机提前抬升。
                    ⚠️ H8 阶段定高给 1100，正好命中这一支（判据含等号），所以那时定高没有姿态修正；
-                      **H9 起定高给 1250±30，不再命中**，姿态环在定高模式下恢复参与。
-                      这正是 VERTICAL_BASE_PWM_US 必须大于 1100 的原因之一：否则输出会因噪声
-                      在边界上来回穿，姿态环被反复 Reset，等于废掉。 */
+                      **H9 起定高给 1250±30、H10 起给 [1150, 1650]，都远在 1100 之上，不再命中**，
+                      姿态环在定高模式下始终参与。
+                      这正是 vertical_control 的地板必须取 1150 而不是 1100 的原因：
+                      地板若等于 1100，输出会因噪声在边界上来回穿，姿态环被反复 Reset，等于废掉。 */
                 if (throttle_us <= MOTOR_ATTITUDE_ENABLE_PWM_US)
                 {
                     AttitudeControl_Reset();
@@ -579,12 +580,22 @@ void MotorTest_Task(void *argument)
                 sample.altitude_cm = altitude_cm;
                 sample.vz_cms = vz_cms;
                 sample.mag_heading_cdeg = mag_heading_cdeg;
-                sample.vz_correction_us = 0;
-                /* 注意：原来的 sample.hover_pwm_us = PidTable_GetMaxThrottleUs() 已删除。
-                   那一格改记目标垂速（vz_target_cms），定高接入前保持 0；
-                   最高油门的值不受影响，仍写在每场开头的 "# altitude ... max_thr=" 行里。
-                   sample 每拍都有 memset 清零，这里不赋值就是 0。 */
-                sample.vz_target_cms = 0;
+                /* ── 定高相关三列（H11 接入）────────────────────────
+                   这三列都是"控制环实际用到的值"，不是重新算的：
+                   vertical_control_state 是上面 VerticalControl_GetSnapshot() 拿到的
+                   同一份快照，所以黑匣子和串口打印看到的必然一致。
+                   ⚠️ 曾经的坑：这里原来恒填 0，而 H9 已经产出了真值，
+                      等于黑匣子里有一列"看着像数据、其实是常数"。
+                   ⚠️ 注意 vz_correction_us 是**快层**（垂速内环修正量，范围约 ±50µs），
+                      **不含**慢层的悬停油门估计值 —— 后者（范围 1150~1650）
+                      目前只有 `[V]` 打印里的 `i=` 能看到，样本记录里没有对应字段。
+                      要在飞行整定时用它，得给样本加一列（改 BLACKBOX_RECORD_SCHEMA，
+                      属独立改动，H10 没做）。 */
+                sample.vz_correction_us = MotorTest_ToI16(vertical_control_state.vz_correction_us);
+                /* 目标垂速。H10 阶段内环的 vz_sp 恒 0，所以这一列现在是常数 0；
+                   H13 接上外环（h_sp − h_est → vz_sp）之后它才开始有内容，
+                   那正是"整定时最想看的一列"。 */
+                sample.vz_target_cms = MotorTest_ToI16(vertical_control_state.vz_sp_cms);
                 /* 高度控制的细分状态（0 普通 / 1 定高在干活 / 4 停手 / 5 已进模式未使能）。
                    本环节修正量恒 0，这一列是唯一能看出"门禁和停手到底怎么走的"记录点。 */
                 sample.altitude_state = vertical_control_state.state;

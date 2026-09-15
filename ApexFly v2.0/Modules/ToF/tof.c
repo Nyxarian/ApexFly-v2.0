@@ -292,9 +292,12 @@ void ToF_Task(void *argument)
                            st    = 细分状态：0 普通 / 1 定高在干活 / 4 停手 / 5 已进未使能
                            sw/ct = 两层门禁位图（全通分别是 0xF）
                            stick = 油门杆；h_sp = 目标高度 cm；gt = 停手去抖计时 ms
-                 ④ 输出    corr  = 内环修正量 µs —— ⚠️ **符号必须与 vz 相反**
+                 ④ 输出    corr  = **快层**：垂速内环修正量 µs —— ⚠️ **符号必须与 vz 相反**
                                    （vz>0 时 corr<0），这是负反馈的唯一证据
-                           thr   = 基础油门 µs（普通模式跟杆走；定高 = 基准 + corr）
+                            i     = **慢层**：悬停油门估计器（H10 起），钳在 1150~1650
+                                    ⭐ 台架上**只有它**能看出积分在不在工作：corr 是快层、
+                                       随时可能为 0，而 i 会随"匀速移动飞机"持续变化
+                           thr   = 基础油门 = i + corr，再钳到 [1150, 1650]（普通模式跟杆走，与这两层无关）
 
                ⚠️ 2026-09-15 主动删掉的字段（**不是遗漏**，理由都记在这里）：
                  filt= / alt=    显示用低通值及其换算结果，raw 一个就够；alt 在遥控器上实时可见
@@ -307,7 +310,7 @@ void ToF_Task(void *argument)
                  rate=           由 stick 唯一决定（三段映射是纯函数）
                  vzsp=           H9 阶段恒 0；**H13 接外环时要加回来**
                  h= / v= / vz=（旧 [ALT] 那三个）与②段完全重复 */
-            Debug_Printf("[V] raw=%umm | h=%.1fcm vz=%+.1fcm/s v=%u | req=%u mode=%u st=%u sw=0x%X ct=0x%X stick=%u h_sp=%.1f gt=%lums | corr=%+.1f thr=%u\r\n",
+            Debug_Printf("[V] raw=%umm | h=%.1fcm vz=%+.1fcm/s v=%u | req=%u mode=%u st=%u sw=0x%X ct=0x%X stick=%u h_sp=%.1f gt=%lums | corr=%+.1f i=%.1f thr=%u\r\n",
                          (unsigned)tof_snapshot.distance_raw_mm,
                          (double)vertical_control_state.h_est_cm,
                          (double)vertical_control_state.vz_est_cms,
@@ -321,6 +324,7 @@ void ToF_Task(void *argument)
                          (double)vertical_control_state.h_sp_cm,
                          (unsigned long)vertical_control_state.ground_timer_ms,
                          (double)vertical_control_state.vz_correction_us,
+                         (double)vertical_control_state.vz_throttle_base_us,
                          (unsigned)radio_state.throttle_pwm_us);
         }
 

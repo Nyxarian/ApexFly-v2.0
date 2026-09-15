@@ -73,7 +73,19 @@ typedef struct
 #define PID_TABLE_ALTITUDE_DEFAULT_H_KP             0.6f
 #define PID_TABLE_ALTITUDE_DEFAULT_H_KI             0.0f
 #define PID_TABLE_ALTITUDE_DEFAULT_H_KD             0.0f
-#define PID_TABLE_ALTITUDE_DEFAULT_MAX_THROTTLE_US  1500.0f
+/* 满杆对应的最高油门，单位微秒。这是**普通模式**杆推到底给的值。
+   ⚠️ 2026-09-15 由 1500 改成 **2000**（用户决定）：当年取 1500 是因为
+      "1450 左右就能起飞，再高用不到，压窄区间精度"——但那个精度是花不出去的：
+      映射 1000~1500 时一格杆 = 0.5µs，而 TIM8 计数 1MHz（`motor.c` 文件头），
+      电调只能分辨 1µs。⇒ 老映射的 0.5µs 分辨率有一半是浪费。
+      改成 1000~2000 后一格杆 = 1µs，正好等于电调分辨率，没有损失。
+   ⚠️ 副作用两条（台架首推时要注意，不是缺陷）：
+      ① 悬停点从杆量约 **900** 挪到约 **450**（1450µs 在 1000~2000 里的 45%）。
+         这是常规手感（多数机器悬停就在中位附近），且往上留了大力气。
+      ② 软启动时间翻倍：满杆行程 1000µs，上升速率 800µs/s ⇒ 约 1.25s（原 0.625s）。
+   ⚠️ 它**只影响普通模式**。定高模式的油门权限是 vertical_control.h 里
+      自己的 [1150, 1650] 常量，**刻意不跟这个值联动**，避免"调手动手感意外改定高"。 */
+#define PID_TABLE_ALTITUDE_DEFAULT_MAX_THROTTLE_US  2000.0f
 
 static void PidTable_AltitudeResetDefaults(PidTableAltitudeParams_t *altitude)
 {
