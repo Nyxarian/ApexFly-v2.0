@@ -29,7 +29,7 @@
  * ⚠️⚠️ **增益必须比 §3.3 的设计值保守**：回路延迟消不掉（ToF 83ms + 差分垂速 +
  *    限速器 125ms），`Kp_v=20` 时内环闭环时间常数只有 11ms，比延迟快 8~15 倍。
  *    仿真确认 60~80ms 延迟下 `vz_kp=20 / h_kp=0.6` 进入极限环。
- *    ⇒ 首飞 `vz_kp=5 / h_kp=0.3`。详见头文件的常量段。
+ *    ⇒ 首飞 `vz_kp=2 / h_kp=0.3`（**2 是扫表定的**，不是拍的，见头文件的常量段）。
  *
  * ── 为什么 H13 之前定高"起飞不了"（这一环的直接动机）────────────
  * 悬停油门估计器只在该层有**垂速误差**时才学习。H13 之前 `vz_sp ≡ 0`，
@@ -134,10 +134,6 @@
    读写不是原子的（结构体拷贝），打印出来的字段理论上可能来自相邻两拍。
    和 vertical_est 是同一个已知局限，对诊断没有影响。 */
 static VerticalControlSnapshot_t vertical_snapshot;
-
-/* 【临时，H6 验证完删除】串口命令覆盖的请求模式，0xFF 表示不覆盖。
-   写方是黑匣子任务的串口解析，读方是控制环；单字节读写天然原子，不需要临界区。 */
-static volatile uint8_t vertical_debug_requested_mode = 0xFFU;
 
 /* 起飞保护：退出停手时置位，用来阻止"刚推杆又被按回去"的死循环。
    详见 vertical_control.h 里 VERTICAL_TAKEOFF_GUARD_CLEAR_H_CM 的说明。 */
@@ -780,11 +776,6 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
     /* ② 杆量按协议量程收一下，顺手填进快照——门禁①要用它。 */
     vertical_snapshot.stick = (throttle_stick > VERTICAL_STICK_MAX) ? VERTICAL_STICK_MAX : throttle_stick;
 
-    /* 【临时，H6 验证完删除】串口 `vm 0/1` 覆盖遥控请求。 */
-    if (vertical_debug_requested_mode != 0xFFU)
-    {
-        requested_mode = vertical_debug_requested_mode;
-    }
     vertical_snapshot.requested_mode = requested_mode;
 
     /* ③ 门禁① */
@@ -1074,9 +1065,4 @@ void VerticalControl_GetSnapshot(VerticalControlSnapshot_t *snapshot)
 {
     if (snapshot == NULL) return;
     *snapshot = vertical_snapshot;
-}
-
-void VerticalControl_SetDebugRequestedMode(uint8_t mode)
-{
-    vertical_debug_requested_mode = mode;
 }

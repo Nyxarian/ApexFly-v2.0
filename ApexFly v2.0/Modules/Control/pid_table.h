@@ -69,7 +69,7 @@ uint16_t PidTable_GetMaxThrottleUs(void);
  *
  * ⚠️ 默认值是 **100**，但台架/首飞都**不该用默认值**：
  *    高度回路延迟消不掉（ToF 83ms + 差分垂速 + 限速器），H9 方案里推的 20
- *    在延迟下已经进入极限环，**首飞建议从 5 起步**（见 vertical_control.h 的常量段）。
+ *    在延迟下已经进入极限环，**首飞建议从 2 起步**（见 vertical_control.h 的常量段）。
  *
  * @param vz_kp 输出，垂速内环比例增益，单位 µs/(cm/s)。可为空。
  * @param vz_ki 输出，垂速内环积分增益，单位 µs/cm。可为空。

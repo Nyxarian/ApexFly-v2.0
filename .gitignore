@@ -91,3 +91,6 @@ Desktop.ini
 *~
 *.swp
 *.swo
+
+# 四元数可视化小工具（本地临时件）
+quaternion_visualizer.html
