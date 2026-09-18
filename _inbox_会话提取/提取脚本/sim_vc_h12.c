@@ -111,7 +111,8 @@ static void tick(uint16_t stick, bool armed, float h, float vz, bool valid)
 }
 
 /* ⭐ 进定高 + 起飞到"控制启用"（st=1）。
-   地面阶段 h=3cm（进停手），推杆 1000（+3cm/s）⇒ h_sp 从 0 涨过 4cm 要 334 拍。
+   地面阶段 h=3cm（进停手，杆 0）；解手靠**推杆边沿**（H14 起）：上一拍杆 0、这一拍推 1000
+   ⇒ **第一拍就变成 st=1**。旧版要"h_sp 涨过 4cm、约 334 拍"，那个出口已删除。
    起飞后估计值固定成调用方给的那组，飞到哪由参数定。 */
 static void setupFlying(float h_fly, float vz_fly)
 {

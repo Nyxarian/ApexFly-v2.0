@@ -1,4 +1,4 @@
-/* 核对 2026-09-15 起的打印格式 [V] 行，并按 **H12** 的验收判据逐条给结论。
+/* 核对 2026-09-15 起的打印格式 [V] 行，并按 **H14** 的验收判据逐条给结论。
    用法：node verify_v.js <审计日志.jsonl> [更多日志...]
    日志位置：C:\Users\fool\.dsh\serial-console\logs\
 
@@ -10,7 +10,7 @@
      v0.18 及更早   没有 `fs=` / `fr=` ⇒ 同上
      v0.15 及更早   没有 `i=`          ⇒ 同上
      v0.16 之前     是 [TOF]+[ALT] 两行 ⇒ 用 verify_h8.js
-     本脚本         v0.20 起（H13）
+     本脚本         v0.20 起（H13/H14：字段没变，只是判据增加了）
 
    ── 判据陷阱清单（H8~H13 合计踩了十次，全在这里）────────────────
    ① 判据不能拿"本拍杆量算出的映射值"直接比 thr：杆扫动时限速器会滞后
@@ -26,6 +26,12 @@
       （st=6 外环冻结），量到的是冻结值而不是限幅值。那是正确行为，但会误报判据。
    ⑧ ⭐ H13 起"符号"的参照物变了：内环的误差是 `vz − vzsp`（**不是** `vz − 0`）。
       拿 `vz` 当参照在 vzsp 较大时会误报。外环的误差是 `h_sp − h`。
+   ⑨ ⭐⭐ H14 起"解手"是**边沿**（上一拍杆在低位、这一拍推过 200），**不是电平**。
+      所以日志里出现"杆已经 >200 而 st 仍是 4"是**正常的**（锁着时推的杆、或杆没经过低位
+      就推上去）—— 这是刻意设计，**不要**写成失败判据。
+   ⑩ ⭐⭐ H14 起 `st=4` 段的**长度**有意义：只持续 ≤1 秒、且两侧都是 `st=1`
+      ⇒ 解手后被判回停手 = **抖**（本次最危险的错误）。
+      正常的"落地 → 再起飞"里 `st=4` 会持续更久（要去抖 + 飞行员重新推杆）。
 */
 const fs = require('fs')
 
@@ -508,6 +514,66 @@ function runs() {
     back.length === 0 ? null : back.every(r => r.gt >= 500),
     back.length === 0 ? '没有 st 1→4 的转换'
       : `${back.length} 次转换，进入那拍 gt=${[...new Set(back.map(r => r.gt))].join(',')}ms、stick=${[...new Set(back.map(r => r.stick))].join(',')}`)
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   H14（停手改成「推杆即解手」，2026-09-15 实施 v0.22）
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* ── H14-① ⭐ 解手那一拍：st 4→1 时 stick 必须 > 200（推杆边沿门槛）──
+   判据是 `stick > VERTICAL_GROUND_EXIT_STICK`（200）—— 含不含等号是这类 bug 的老地方。 */
+{
+  const rs = runs()
+  const releases = []
+  for (let k = 1; k < rs.length; k++) if (rs[k - 1].st === 4 && rs[k].st === 1) releases.push(R[rs[k].from])
+  const low = releases.filter(r => r.stick <= 200)
+  verdict('H14-① ⭐ 解手（st 4→1）那一拍 stick > 200（推杆门槛）',
+    releases.length === 0 ? null : low.length === 0,
+    releases.length === 0 ? '日志里没有 st 4→1 的转换（这次没解过手）'
+      : `${releases.length} 次解手，那一拍 stick ∈ {${[...new Set(releases.map(r => r.stick))].join(',')}}` +
+        (low.length ? ` ← **有 ${low.length} 次 stick ≤200 却解手了**（门槛写错了？）` : ' ✅'))
+}
+
+/* ── H14-② ⭐⭐ 推杆解手不抖：st 不许在 1 与 4 之间**快速来回翻** ──
+   本次改动最容易出的错就是它：起飞保护的清除条件若还留着"变化率 < 0"，
+   而杆在下降段时变化率正好是负的 ⇒ 解手 500ms 后又被判回停手 ⇒ 电机转一下停一下。
+   判据：某个 st=4 段**只持续 ≤2 个样本（≤1 秒）**且前后都是 st=1 ⇒ 抖。
+   ⚠️ 真实的"落地 → 再起飞"不会被误判：停手至少要 500ms 去抖 + 飞行员重新推杆。 */
+{
+  const rs = runs()
+  const hasGround = rs.some(r => r.st === 4)
+  const thrash = []
+  for (let k = 1; k < rs.length - 1; k++) {
+    const g = rs[k]
+    if (g.st !== 4 || (g.to - g.from) > 2) continue
+    if (rs[k - 1].st === 1 && rs[k + 1].st === 1) thrash.push({ at: g.from, stick: R[g.from].stick })
+  }
+  verdict('H14-② ⭐⭐ 推杆解手不抖（st 不许在 1↔4 之间每 1 秒来回翻）',
+    hasGround ? (thrash.length === 0) : null,
+    !hasGround ? '日志里没有 st=4 的段（没进过停手）'
+      : `${rs.length} 个状态段，其中「停手只持续 ≤1 秒且两侧都是 st=1」的 ${thrash.length} 处` +
+        (thrash.length
+          ? `（样本下标 ${thrash.slice(0, 5).map(x => x.at).join(',')}，stick ${[...new Set(thrash.map(x => x.stick))].join(',')}）← **这就是抖**`
+          : ' ✅'))
+}
+
+/* ── H14-③ ⭐ 推杆之后电机必须转：st=1 且 stick>200 ⇒ thr ≠ 1000 ──
+   这条直接对应本环节的目的（"杆在下降段/中间段推着，电机也要转"）。
+   ⚠️ 必须**跳过每个 st=1 段开头 8 拍**：解手那一拍油门还在从 1000 经速率限制器往上爬
+      （实测过渡值 1000/1003/1055/1100/1192/1230），那几拍 thr 低是**正常的**。
+      第一版忘了跳，于是"正确组"自己把这条判失败了 —— 与判据 ④ / ★ 的写法保持一致。 */
+{
+  const pushed = []
+  for (const run of runs()) {
+    if (run.st !== 1) continue
+    for (let k = run.from + 8; k < run.to; k++) if (R[k].stick > 200) pushed.push(R[k])
+  }
+  const dead = pushed.filter(r => r.thr <= 1000)
+  verdict('H14-③ ⭐ 推杆解手后（st=1 且 stick>200，跳过限速器过渡）thr 不许是 1000（电机必须转）',
+    pushed.length === 0 ? null : dead.length === 0,
+    pushed.length === 0 ? '没有「st=1 稳态且 stick>200」的样本'
+      : `${pushed.length} 个样本里 thr≤1000 的有 ${dead.length} 个` +
+        (dead.length ? `（stick ${[...new Set(dead.map(r => r.stick))].slice(0, 5).join(',')}）` : ' ✅'))
 }
 
 /* ── ⑨ 举到 1.2m 以上 → sw 掉 HEIGHT_OK ── */

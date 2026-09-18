@@ -2,7 +2,18 @@
    只碰 vertical_control 的状态机与新加的 VerticalControl_GetThrottleUs()，
    再加一个与 motor_test.c **逐行对应**的油门来源分叉 + 速率限制器 + 上锁分支。
 
-   编译（宿主机 gcc；本文件不碰任何硬件）：
+   ⚠️⚠️ **【历史脚本，已不能编译，不要再试图修它】**（2026-09-15 核实时标注）
+      · 它的断言全部建立在 **H8 当时的形态**上：定高"控制启用"给的是**占位值 1100µs**、
+        没有慢层积分器、没有失效状态机、没有外环、停手出口是"h_sp 攒过 4cm"。
+        这些从 **H9（1250 固定基准）→ H10（悬停油门估计器）→ H12（失效）→ H13（外环）
+        → H14（推杆解手）** 一路改过来，**每一条都不成立了**。
+      · 链接也过不了：从 **H9 起**缺 `PidTable_GetAltitudeParams`，从 **H13 起**又缺
+        `PidTable_GetHeightParams`（都是后来新增的依赖）。
+      · **当前有效的回归测试**：sim_vc_h10（49 项）、sim_vc_h12（68 项）、
+        sim_vc_h13（34 项）、sim_vc_h14（48 项）。
+      ⇒ 保留本文件只为留档（"H8 当时验了什么、我当时错在哪"），不要接进任何自动检查。
+
+   编译（宿主机 gcc；本文件不碰任何硬件 —— **现在会失败，见上**）：
      gcc -std=c99 -Wall -Wextra -I sim_stub -I "ApexFly v2.0/Modules/Control" `
          -I "ApexFly v2.0/Modules/Motor" sim_vc_h8.c `
          "ApexFly v2.0/Modules/Control/vertical_control.c" -o sim_vc_h8.exe

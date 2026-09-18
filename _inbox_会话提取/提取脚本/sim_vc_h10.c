@@ -122,7 +122,10 @@ static void set_est(float height_cm, float vz_cms)
     fake_est.vz_cms = vz_cms;
 }
 
-/* 跑到"控制启用"（st=1）。飞机在台架上，h_est 恒 3cm，靠 h_sp 涨过 4cm 退出停手。 */
+/* 跑到"控制启用"（st=1）。飞机在台架上，h_est 恒 3cm。
+   ⚠️ 2026-09-15（H14）起"解手"改成了**推杆边沿**：上一拍杆 0（低位）、这一拍推上去
+      ⇒ 第一拍就解手。旧版是"靠 h_sp 涨过 4cm"，那个出口已删除。
+      本函数**不用改** —— 它本来就是从杆 0 开始的，改成边沿之后反而更快。 */
 static int setup_active(void)
 {
     int k;

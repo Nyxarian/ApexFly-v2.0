@@ -139,6 +139,15 @@ static VerticalControlSnapshot_t vertical_snapshot;
    详见 vertical_control.h 里 VERTICAL_TAKEOFF_GUARD_CLEAR_H_CM 的说明。 */
 static bool vertical_takeoff_guard;
 
+/* 上一拍的油门杆量，只用来做"推杆解手"的**边沿检测**（2026-09-15 加）。
+   为什么非得跨拍比较、不能只看"本拍杆量 > 门槛"：
+     · "锁着的时候先把杆推到 1000、再解锁" —— 解锁那一拍杆就是 1000，
+       只看电平会在那一拍直接解手，一上来就给 1250µs；
+     · 落地进停手时杆可能正停在 250（下降段），只看电平同样会立刻解手 ⇒ 进/出来回抖。
+   边沿条件 = `上一拍 ≤ LOW` 且 `本拍 > EXIT`，两个门槛见头文件。
+   ⚠️ 它在 ⑥ 段**之后**无条件更新，所以在 ⑥ 里读到的永远是"上一拍"的值。 */
+static uint16_t vertical_stick_prev;
+
 /* ── 垂速内环（H9）────────────────────────────────────────────
    只有一份 Pid_t，**不是** CascadePid_t：本阶段只有内环，外环在 H13。
    不先用 CascadePid_t 占位，是因为 CascadePid_UpdateInner 依赖 UpdateOuter
@@ -697,6 +706,9 @@ void VerticalControl_Init(void)
     vertical_snapshot.state = (uint8_t)VERTICAL_STATE_MANUAL;
     vertical_snapshot.h_sp_cm = VERTICAL_H_SP_MIN_CM;
     vertical_takeoff_guard = false;
+    /* 杆量记忆也清掉：上电时它没有意义。留成"上一拍杆在低位"虽然安全
+       （最多是第一次推杆就允许解手），但状态不该带上电的未知值。 */
+    vertical_stick_prev = 0U;
 
     /* 失效状态整组清零（H12）。上电 / IMU 重初始化时绝不能带着上一次的锁存油门。 */
     VerticalControl_ClearFailsafe();
@@ -731,6 +743,9 @@ void VerticalControl_Reset(void)
     /* 模式刚在地面上切进来，飞行员不可能是"正在起飞"，保护要清掉，
        否则紧接着的停手判定会被它挡住。 */
     vertical_takeoff_guard = false;
+    /* 杆量记忆清成 0（= 低位）。Reset 只在门禁①全通时被调用，而门禁①要求杆 ≤50，
+       所以此刻真实的杆本来就在低位 —— 清成 0 与真实值一致，不会造出假的解手边沿。 */
+    vertical_stick_prev = 0U;
     /* 内环也要复位：模式切换是"从零开始"，积分和微分历史都不能留
        （H10 打开慢层之后，留着旧积分等于带着上一轮的悬停油门估计值进新一次飞行，
         而两次飞行的重量/电压可能不同）。
@@ -801,8 +816,13 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
         }
     }
 
-    /* ⑤ 积分。⚠️ 停手期间这一句也必须跑：h_sp 是停手唯一的出口，
-          把它停掉，飞机落地之后就再也起飞不了了（方案 §15.3）。 */
+    /* ⑤ 积分。⚠️ 停手期间这一句**照样必须跑**。
+          2026-09-15 起"停手出口"已经不看 h_sp（改成推杆边沿了），但 h_sp 仍然必须
+          一直保持"当前杆量积分出来的值"，两个理由：
+            ① 解手那一刻它立刻就是外环的设定值 —— 不积分的话它是个陈旧值，
+               等于给外环一个凭空跳变的设定值；
+            ② 停手期间飞行员完全可能已经把杆推到高位（例如锁着时推杆），
+               这段位移本来就该体现在 h_sp 里。 */
     vertical_snapshot.stick_rate_cms = VerticalControl_StickToRateCms(vertical_snapshot.stick);
     if (dt_s > 0.0f)
     {
@@ -816,10 +836,26 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
           这样解锁那一刻就已经是停手，不会留出"刚解锁就以为自己在飞"的窗口。 */
     if (vertical_snapshot.mode == (uint8_t)VERTICAL_MODE_ALT_HOLD)
     {
-        /* 起飞保护先更新：飞机明显离地、或飞行员把杆收回下降段，都算这次起飞结束。 */
+        /* ⭐ 上锁 = "一次飞行"的硬边界，把起飞保护清掉（2026-09-15 加）。
+           ⚠️ 必须加，否则"解手后没飞起来 → 上锁 → 再解锁"会带着上一次的 true 出来
+              ⇒ 进不了停手 ⇒ 解锁后门禁②直接全通、油门给 1250，**地面上电机转起来**。
+           （停手状态本身不动：上锁时它照样成立，见下面进入条件的说明。） */
+        if (!armed)
+        {
+            vertical_takeoff_guard = false;
+        }
+
+        /* 起飞保护更新：飞机明显离地、或飞行员把杆收回来，都算这次起飞结束。
+           ⚠️ ② 原文是"杆回到下降段（变化率 < 0）"，2026-09-15 改成杆量判据，这是**必改**的：
+              解手已经改成"推杆"触发，而**杆处在下降段时变化率正好是负的**
+              ⇒ 解手那一拍保护立刻被清 ⇒ 500ms 去抖一满又判回停手
+              ⇒ 电机**转一下、停一下**来回抖。
+              改成"杆 ≤ VERTICAL_GROUND_STICK_LOW"之后，从解手到收杆这一段被挡住，
+              滞回宽度 = 200（解手）− 100（才准回），这才是真正的不抖。 */
         if (vertical_takeoff_guard)
         {
-            if ((vertical_snapshot.est_valid && (vertical_snapshot.h_est_cm > VERTICAL_TAKEOFF_GUARD_CLEAR_H_CM)) || (vertical_snapshot.stick_rate_cms < 0.0f))
+            if ((vertical_snapshot.est_valid && (vertical_snapshot.h_est_cm > VERTICAL_TAKEOFF_GUARD_CLEAR_H_CM)) ||
+                (vertical_snapshot.stick <= VERTICAL_GROUND_STICK_LOW))
             {
                 vertical_takeoff_guard = false;
             }
@@ -827,10 +863,20 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
 
         if (vertical_snapshot.grounded)
         {
-            /* 出口只有一个：杆积分出来的 h_sp 超过门槛。
-               ⚠️ 不能改成 h_est——停手把油门压到最低，飞机离不开地，
-               h_est 永远涨不上去，那样会永久卡死在停手，推杆也起不来。 */
-            if (vertical_snapshot.h_sp_cm > VERTICAL_GROUND_EXIT_H_SP_CM)
+            /* 出口：**推杆即解手**（2026-09-15 改，原来是 h_sp > 4cm）。
+               ⭐ 为什么改：h_sp **只在杆 >650（上升段）时才涨** ⇒ 杆在下降段和中间段
+                  推得再多，油门恒 1000、电机一点都不转，想解手必须推到上升段再保持约 0.8 秒。
+                  飞行员要的是"推一点就转起来"，那杆的位置本身就该是判据。
+               ⚠️ 必须是**边沿**（上一拍杆在低位、这一拍推过 200），不能只判电平：
+                  否则"锁着时先把杆推到 1000、再解锁"会在解锁那一拍直接解手给油；
+                  落地进停手时杆若正停在 250，只判电平也会立刻解手 ⇒ 进/出来回抖。
+               ⚠️ 只要求 armed：解手之后油门就交给控制器了
+                  （1000 → 0.31s 爬到 1250，再花 8~13 秒自己把悬停油门学出来），
+                  "解锁"是唯一需要的许可；杆停在下降段/中间段照样解手、电机照样转
+                  （地板 1150 高于电调起转点 1035，所以"转"是有保证的）。 */
+            if (armed &&
+                (vertical_stick_prev <= VERTICAL_GROUND_STICK_LOW) &&
+                (vertical_snapshot.stick > VERTICAL_GROUND_EXIT_STICK))
             {
                 vertical_snapshot.grounded = false;
                 vertical_snapshot.ground_timer_ms = 0U;
@@ -844,6 +890,11 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
             /* 进入条件要连续满足，单拍跌破不动作：否则起飞擦地时会在"停手 ↔ 控制"之间来回抖。
                还要看"本拍有没有在命令爬升"：否则飞机在地面上、飞行员推杆要起飞时，
                它会在 500ms 后又被判成停手，把刚发出的爬升指令按回去。
+               ⭐ 2026-09-15（改成推杆解手）：**本条件一个字没改** —— 落地就进停手就是要这样。
+                  那"刚解手、杆还停在下降段，会不会 500ms 后又判回停手"？由**起飞保护**挡着
+                  （它的清除条件改成了"杆 ≤ 100"）。⇒ 分工是**进入看高度、滞回看杆量**。
+                  ⚠️ 千万不要把"杆 ≤ 100"加进本条件 —— 那样"杆停在中位落地"就永远进不了
+                     停手，飞机已经在地上了电机还在转，与"落地就进停手"直接冲突。
                而"被气流或障碍物压到地面、杆还停在中位"这种情况杆的变化率是 0，
                照样能进——这正是当初决定不要求"杆必须在最低位"的那个场景。 */
             elapsed_ms = (uint32_t)((dt_s * 1000.0f) + 0.5f);
@@ -853,10 +904,12 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
                 vertical_snapshot.grounded = true;
                 /* 进停手时把设定值归零（下限），**不是**对齐到当前高度。
                    为什么不能对齐到 h_est：地面读数是"镜头到地面的距离"，本来就不小
-                   （不垫高约 1cm，垫高约 4cm），而对齐出来的 h_sp 只要超过退出门槛 4cm，
+                   （实测中位 2.8cm），而对齐出来的 h_sp 会让外环一进来就带一个初始误差，
                    下一拍就会立刻满足"退出"条件 → 进入/退出来回抖。
                    归零之后这个边角彻底消失，而且退出的无扰性不受影响：
-                   退出时 h_sp≈4cm、h_est≈地面读数，外环误差仍然接近 0。 */
+                   解手那一刻 h_sp=0、h_est≈地面读数，外环误差只有几厘米。
+                   ⚠️ 2026-09-15 起停手出口不再看 h_sp，但这一句**照样要留** ——
+                      它保证的是"解手瞬间外环的设定值是干净的"。 */
                 vertical_snapshot.h_sp_cm = VERTICAL_H_SP_MIN_CM;
             }
         }
@@ -872,6 +925,11 @@ void VerticalControl_Update(uint8_t requested_mode, uint16_t throttle_stick, boo
         vertical_snapshot.ground_timer_ms = 0U;
         vertical_takeoff_guard = false;
     }
+
+    /* ⑥ 之后：把本拍杆量存下来，供**下一拍**做"推杆解手"的边沿检测。
+       ⚠️ 位置必须在 ⑥ **之后**、且**无条件**执行（模式不是定高时也要更新）——
+          否则切模式之后 prev 是个陈旧值，第一次推杆可能被误判成边沿。 */
+    vertical_stick_prev = vertical_snapshot.stick;
 
     /* ⑦ 门禁②。必须放在停手判定之后：里面有一位就是"不处于停手"。 */
     vertical_snapshot.control_gates = VerticalControl_EvalControlGates(armed, roll_deg, pitch_deg, vertical_snapshot.grounded);

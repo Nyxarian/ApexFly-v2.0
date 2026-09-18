@@ -1,6 +1,17 @@
 /* H9（垂速内环 P）的台架仿真：把验收矩阵在**烧录之前**先跑一遍。
    真实参与编译的只有 vertical_control.c 和 pid.c，其余（估计器、参数表）用桩顶掉。
 
+   ⚠️⚠️ **【历史脚本，不要再当回归测试用】**（2026-09-15 核实时发现并标注）
+      · 它的断言基于 **H9 当时的固定基准 1250µs**；而 **H10 起基准换成了"悬停油门估计器
+        （慢层积分器）"**，H12 又加了失效状态机、H13 加了外环 —— 所以现在跑起来
+        **20 项断言失败**，那些失败**不代表产品代码有问题**。
+      · 编译一度也过不了（H13 起 vertical_control.c 要 `PidTable_GetHeightParams`），
+        2026-09-15 补了桩让它至少能编过，但**断言没有跟着改**（价值低：H9 关心的符号与
+        限幅已被 sim_vc_h10/h12/h13/h14 覆盖）。
+      · **当前有效的回归测试是**：sim_vc_h10（49 项）、sim_vc_h12（68 项）、
+        sim_vc_h13（34 项）、sim_vc_h14（48 项）。
+      ⇒ 保留本文件只为留档（"H9 当时验了什么"），不要接进任何自动检查里。
+
    编译（宿主机 gcc；本文件不碰任何硬件）：
      gcc -std=c99 -Wall -Wextra -Wno-unused-parameter `
        -I sim_stub -I "ApexFly v2.0/Modules/Control" -I "ApexFly v2.0/Modules/Motor" `
@@ -43,6 +54,18 @@ void PidTable_GetAltitudeParams(float *vz_kp, float *vz_ki, float *vz_kd)
     if (vz_kp != NULL) *vz_kp = stub_vz_kp;
     if (vz_ki != NULL) *vz_ki = stub_vz_ki;
     if (vz_kd != NULL) *vz_kd = stub_vz_kd;
+}
+
+/* H13 起 vertical_control.c 还会读**外环**参数（`PidTable_GetHeightParams`），
+   不补这个桩从 v0.20 起就链接不过。这里把外环**关掉**（h_kp=0 ⇒ vz_sp 恒 0），
+   与 sim_vc_h10/h12 的做法一致。
+   ⚠️ 但**光补桩救不了本文件**：它的断言还基于 H10 之前的固定基准 1250µs
+      （见文件头的"历史脚本"说明）—— 编得过 ≠ 判得过，别把它接进自动检查。 */
+void PidTable_GetHeightParams(float *h_kp, float *h_ki, float *h_kd)
+{
+    if (h_kp != NULL) *h_kp = 0.0f;
+    if (h_ki != NULL) *h_ki = 0.0f;
+    if (h_kd != NULL) *h_kd = 0.0f;
 }
 
 /* 与真的 PidTable_GetMaxThrottleUs 一致：先按 1200~2000 夹取再四舍五入。 */

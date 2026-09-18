@@ -1,14 +1,20 @@
-/* 生成合成的 [V] 日志，自测 verify_v.js（**H12 版**，含 fs= / fr=）。
+/* 生成合成的 [V] 日志，自测 verify_v.js（**H14 版**）。
    用法：node gen_fake_v_log.js <输出目录>
 
-   生成六份，其中三份是"正确"，三份是**故意的对照组**：
+   一份"正确" + 十份**故意的对照组**：
 
-     fake_v_ok.jsonl       全部正确                       → 期望全过
-     fake_v_bad.jsonl      **快层**符号写反               → 期望 ⑤⑥ 失败
-     fake_v_badslow.jsonl  **慢层**符号写反               → 期望「慢层符号」失败
-     fake_v_badhold.jsonl  st=6 期间 thr 在漂             → 期望 H12-① 失败
-     fake_v_badramp.jsonl  st=7 期间 thr 回升             → 期望 H12-② 失败
-     fake_v_badatt.jsonl   姿态超限先进了 st=6            → 期望 H12-③ 失败
+     fake_v_ok.jsonl         全部正确                       → 期望全过
+     fake_v_bad.jsonl        **快层**符号写反               → 期望 ⑤⑥ 失败
+     fake_v_badslow.jsonl    **慢层**符号写反               → 期望「慢层符号」失败
+     fake_v_badhold.jsonl    st=6 期间 thr 在漂             → 期望 H12-① 失败
+     fake_v_badramp.jsonl    st=7 期间 thr 回升             → 期望 H12-② 失败
+     fake_v_badatt.jsonl     姿态超限先进了 st=6            → 期望 H12-① 与 H12-③ 失败
+     fake_v_badouter.jsonl   **外环符号写反**               → 期望 H13-① 失败
+     fake_v_baddead.jsonl    **死区内 vzsp 不为 0**         → 期望 H13-② 失败
+     fake_v_badtakeoff.jsonl **vzsp>2 时 i 反而下降**       → 期望 H13-④ 失败
+     fake_v_badthrash.jsonl  ⭐ **解手后被判回停手**（st 1↔4 每 1 秒来回翻）→ 期望 H14-② 失败
+     fake_v_badrelease.jsonl ⭐ **未过门槛却解手**（那一拍 stick=150）      → 期望 H14-① 失败
+     fake_v_badpush.jsonl    ⭐ **推着杆电机不转**（st=1 且 stick=450 但 thr=1000）→ 期望 H14-③ 失败
 
    ⭐ 为什么必须有对照组：只有"正确的组也能过"是不够的 ——
       还必须证明脚本**真的有本事抓到写错的那种**，否则它只是个永远说 OK 的摆设。
@@ -32,7 +38,8 @@ function line(o) {
     `corr=${o.corr >= 0 ? '+' : '-'}${Math.abs(o.corr).toFixed(1)} i=${o.i.toFixed(1)} thr=${o.thr}`
 }
 
-/* fault: null | 'fast' | 'slow' | 'hold' | 'ramp' | 'attHold' */
+/* fault: null | 'fast' | 'slow' | 'hold' | 'ramp' | 'attHold' | 'outer' | 'dead' | 'takeoff'
+          | 'thrash' | 'release' | 'pushdead' */
 function build(fault) {
   const L = []
   /* ⚠️ 必须像固件一样把 corr 钳到 ±CORR_LIM、把 thr 钳到 [1150,1650]：
@@ -84,8 +91,14 @@ function build(fault) {
   }
 
   /* ── 进入控制启用：前 8 拍是限速器过渡（判据 ④ 会跳过每段开头 8 拍）── */
-  for (const t of [1000, 1003, 1055, 1100, 1192, 1230, 1250, 1250]) {
-    push({ raw: 28, h: 3.4, vz: 0.1, v: 1, req: 1, mode: 1, st: 1, sw: 0xC, ct: 0xF, stick: 1000, hsp: 6.0, gt: 0, fs: 0, fr: 0, vzsp: vsp(6.0, 3.4), corr: 0, i: 1250, thr: t })
+  /* ⚠️ 这一段的**第一条就是"解手那一拍"**（st 4→1）：正常 stick=1000（远过 200 门槛）。
+        对照组 'release' 把它改成 150 —— 那是"没推够门槛却解了手"，H14-① 必须抓到。 */
+  {
+    const relStick = (fault === 'release') ? 150 : 1000
+    const ramp = [1000, 1003, 1055, 1100, 1192, 1230, 1250, 1250]
+    for (let k = 0; k < ramp.length; k++) {
+      push({ raw: 28, h: 3.4, vz: 0.1, v: 1, req: 1, mode: 1, st: 1, sw: 0xC, ct: 0xF, stick: (k === 0) ? relStick : 1000, hsp: 6.0, gt: 0, fs: 0, fr: 0, vzsp: vsp(6.0, 3.4), corr: 0, i: 1250, thr: ramp[k] })
+    }
   }
 
   /* ── 静止（小噪声）：给 ⑦ 用。
@@ -121,6 +134,41 @@ function build(fault) {
     iT += (fault === 'takeoff') ? -8 : 8
     pushThr({ raw: 30, h: 3.0, vz: 0.0, v: 1, req: 1, mode: 1, st: 1, sw: 0xC, ct: 0xF, stick: 1000, hsp: hspT, gt: 0, fs: 0, fr: 0, vzsp: vs, corr: corrOf(0.0, vs), i: iT, thr: iT + corrOf(0.0, vs) })
   }
+  /* ── ⭐ H14：推杆解手后把杆停在**中间段**（stick 450）—— "电机必须转"的正靶子 ──
+     thr = i + corr：i 从当前值逐拍往地板走（方向与内环误差 (vz−vzsp) 相反，
+     所以「慢层符号」那条判据也过得去），最终 thr 被钳在 1150 —— 远高于电调起转点，
+     所以**电机一定在转**。
+     对照组 'pushdead'：从第 4 拍起 thr 直接写成 1000（推着杆电机却停）⇒ H14-③ 必须抓到。
+     ⚠️ 长度取 16 拍：判据 ④ / ★ / H14-③ 都跳过每段开头 8 拍，后 8 拍才是靶子。
+     ⚠️ 这里必须用 `push`（不钳 thr）而不是 `pushThr` —— 否则对照组的 1000 会被钳到 1150，
+        那个对照组就废了（合成数据自己把靶子擦掉了）。 */
+  {
+    let iMid = i
+    for (let k = 0; k < 16; k++) {
+      const vs = vsp(0.0, 2.8)                     /* 目标 0 < 实际 2.8cm ⇒ vzsp < 0 */
+      const corr = corrOf(0.0, vs)
+      iMid = Math.max(1150, iMid - 12)
+      const row = { raw: 28, h: 2.8, vz: 0.0, v: 1, req: 1, mode: 1, st: 1, sw: 0xC, ct: 0xF,
+                    stick: 450, hsp: 0.0, gt: 0, fs: 0, fr: 0, vzsp: vs, corr, i: iMid }
+      if (fault === 'pushdead' && k >= 4) push({ ...row, thr: 1000 })
+      else push({ ...row, thr: Math.round(clamp(iMid + corr, 1150, 1650)) })
+    }
+  }
+
+  /* ── ⭐ H14 对照组 'thrash'：解手后被判回停手 —— st 在 1 与 4 之间每 1 秒来回翻，
+         而**杆量一直没动**（stick 恒 450）。这是本环节最危险、也最容易写出来的错：
+         起飞保护的清除条件若还留着"变化率 < 0"，而杆在下降段时变化率正好是负的
+         ⇒ 解手那一拍保护立刻失效 ⇒ 500ms 后又判回停手 ⇒ 电机转一下停一下。 ── */
+  if (fault === 'thrash') {
+    const vs = vsp(0.0, 2.8)
+    for (let k = 0; k < 4; k++) {
+      push({ raw: 28, h: 2.8, vz: 0.0, v: 1, req: 1, mode: 1, st: 1, sw: 0xC, ct: 0xF,
+             stick: 450, hsp: 0.0, gt: 0, fs: 0, fr: 0, vzsp: vs, corr: corrOf(0.0, vs), i: 1160, thr: 1160 })
+      push({ raw: 28, h: 2.8, vz: -0.5, v: 1, req: 1, mode: 1, st: 4, sw: 0xE, ct: 0x7,
+             stick: 450, hsp: 0.0, gt: 500, fs: 0, fr: 0, corr: 0, i: 1250, thr: 1000 })
+    }
+  }
+
   const iLock = i
 
   /* ── ⭐ 失效保持：ToF 掉了，thr **锁存不变**，fs 涨到 2000 ── */
@@ -185,6 +233,9 @@ const groups = [
   ['fake_v_badouter.jsonl', 'outer', '**外环符号写反** → 期望 H13-① 失败'],
   ['fake_v_baddead.jsonl', 'dead', '**死区内 vzsp 不为 0** → 期望 H13-② 失败'],
   ['fake_v_badtakeoff.jsonl', 'takeoff', '**vzsp>2 时 i 反而下降** → 期望 H13-④ 失败'],
+  ['fake_v_badthrash.jsonl', 'thrash', '解手后被判回停手（st 1↔4 每 1 秒来回翻）→ 期望 H14-② 失败'],
+  ['fake_v_badrelease.jsonl', 'release', '未过门槛却解手（那一拍 stick=150）→ 期望 H14-① 失败'],
+  ['fake_v_badpush.jsonl', 'pushdead', '推着杆电机不转（st=1、stick=450 而 thr=1000）→ 期望 H14-③ 失败'],
 ]
 for (const [name, fault, desc] of groups) {
   fs.writeFileSync(path.join(outDir, name), build(fault))

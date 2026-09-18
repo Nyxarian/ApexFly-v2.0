@@ -92,8 +92,9 @@ static void tickReq(uint8_t req, uint16_t stick, bool armed, float roll, float p
     VerticalControl_Update(req, stick, true, armed, roll, pitch, DT);
 }
 
-/* 让飞机进入"控制启用"（st=1）。地面读数 3cm，推杆 1000（+3cm/s）
-   ⇒ h_sp 从 0 涨过 4cm 要 334 拍；之后继续推到 nFrames 拍把 h_sp 抬到想要的值。 */
+/* 让飞机进入"控制启用"（st=1）。地面读数 3cm，解手靠**推杆边沿**（H14 起）：
+   上一拍杆 0、这一拍推 1000 ⇒ 第一拍就解手；之后继续推到 nFrames 拍把 h_sp 抬到想要的值。
+   （旧版是"h_sp 涨过 4cm 要 334 拍"，那个出口已删除；本函数不用改，它本来就从杆 0 起。） */
 static void setupFlying(int extraFrames, float h_fly)
 {
     int k;
