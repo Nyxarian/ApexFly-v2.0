@@ -25,7 +25,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "apex_config.h"
 #include "debug.h"
+#include "flow.h"
 #include "i2c.h"
 #include "imu_attitude.h"
 #include "imu_bias.h"
@@ -56,7 +58,17 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-
+/* ── 光流任务（2026-09-18，OF1~OF5）────────────────────────────
+   与 tofTask / magtask 同级（BelowNormal）：它只收字节、数数、标零点，
+   **不参与任何控制**，优先级不该高于任何人。
+   栈 384 词：调用链很浅（解析器 + 一次结构体拷贝），留足余量。
+   ⚠️ 放在 USER CODE 区里，CubeMX 重新生成不会清掉。 */
+osThreadId_t flowTaskHandle;
+const osThreadAttr_t flowTask_attributes = {
+  .name = "flowTask",
+  .priority = (osPriority_t) osPriorityBelowNormal,
+  .stack_size = 384 * 4
+};
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -118,7 +130,7 @@ const osThreadAttr_t tofTask_attributes = {
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
-
+void StartFlowTask(void *argument);
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -196,13 +208,25 @@ void MX_FREERTOS_Init(void) {
   magtaskHandle = osThreadNew(StartMagTask, NULL, &magtask_attributes);
 
   /* creation of gpsTask */
+  /* ⚠️ 下面这个 #if 是**手工加**的，而且它**不在 USER CODE 区里**：
+     USART2 同一时刻只能归一个人用，接了光流就不能再建 GPS 任务，
+     否则两边抢同一个 DMA 通道（现象是 [OF] 的 n 一直是 0）。
+     ⇒ CubeMX 重新生成会让这个 #if 消失，生成完必须回来补。
+     见 Core/Inc/apex_config.h。 */
+#if !APEX_UART2_ROLE_FLOW
   gpsTaskHandle = osThreadNew(StartGpsTask, NULL, &gpsTask_attributes);
+#endif
 
   /* creation of tofTask */
   tofTaskHandle = osThreadNew(StartTofTask, NULL, &tofTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+#if APEX_UART2_ROLE_FLOW
+  /* creation of flowTask：USART2 归光流时才建（见 Core/Inc/apex_config.h）。 */
+  flowTaskHandle = osThreadNew(StartFlowTask, NULL, &flowTask_attributes);
+#else
+  /* USART2 归 GPS：光流任务不建，省下一份栈。 */
+#endif
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -334,6 +358,18 @@ void StartTofTask(void *argument)
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
-
+/**
+  * @brief  光流任务（2026-09-18，OF1~OF5）。
+  *         收 CX-OF 的串口帧、判有效性、标零点、累积流量。
+  *         ⚠️ 本阶段**不接任何控制**，唯一出口是 tof.c 里那行 [OF] 打印。
+  * @param  argument: Not used
+  * @retval None
+  */
+void StartFlowTask(void *argument)
+{
+  /* USER CODE BEGIN StartFlowTask */
+  Flow_Task(argument);
+  /* USER CODE END StartFlowTask */
+}
 /* USER CODE END Application */
 

@@ -39,6 +39,7 @@
 
 #include "cmsis_os.h"
 #include "debug.h"
+#include "flow.h"
 #include "i2c.h"
 #include "radio.h"
 #include "task.h"
@@ -264,6 +265,7 @@ void ToF_Task(void *argument)
         {
             VerticalControlSnapshot_t vertical_control_state;
             RadioFlightStateSnapshot_t radio_state;
+            FlowState_t flow_state;
 
             next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
             /* ⚠️ 估计高度/垂速/有效标志全部从 **vertical_control 的快照**读，
@@ -338,6 +340,21 @@ void ToF_Task(void *argument)
                          (double)vertical_control_state.vz_correction_us,
                          (double)vertical_control_state.vz_throttle_base_us,
                          (unsigned)radio_state.throttle_pwm_us);
+
+            /* ── 光流一行（2026-09-18，OF1~OF5）─────────────────────
+               ⚠️ 本阶段光流**不接任何控制**，这一行是它唯一的出口。
+               n     = 四重校验全过、成功解出的帧数（持续增长才说明接线/波特率对）
+               bad   = 累加和失败 / 长度或包尾失败（持续增长 ⇒ 波特率或接线有问题）
+               qrej  = 质量不达标被拒的帧数
+               q     = 最近一帧的图像质量 —— **判断地面纹理/光照够不够的唯一依据**
+               dx/dy = 最近一帧的原始位移计数（有符号；单位是"计数"，不是毫米）
+               z     = 标定得到的零点，单位计数/帧（理想应远小于 1）
+               sx/sy = 累积流量（已减零点）—— ⭐ **静止时它不该持续单向增长**
+               v     = 数据是否可用（为 0 时 sx/sy 是**冻结**的旧值，不是清零）
+               cal   = 0 未开始 / 1 采样中 / 2 已完成 / 3 失败待重来
+               a     = 距最近一帧**合格**数据的毫秒数 */
+            Flow_GetState(&flow_state);
+            Debug_Printf("[OF] n=%lu bad=%lu/%lu qrej=%lu | q=%u dx=%d dy=%d | z=%+.2f,%+.2f | sx=%+.1f sy=%+.1f | v=%u cal=%u a=%lums\r\n", (unsigned long)flow_state.frame_count, (unsigned long)flow_state.checksum_error_count, (unsigned long)flow_state.format_error_count, (unsigned long)flow_state.quality_reject_count, (unsigned)flow_state.quality, (int)flow_state.dx, (int)flow_state.dy, (double)flow_state.zero_x, (double)flow_state.zero_y, (double)flow_state.sum_x, (double)flow_state.sum_y, flow_state.valid ? 1U : 0U, (unsigned)flow_state.cal, (unsigned long)flow_state.age_ms);
         }
 
         /* 每步都让出 CPU：本任务与 magtask 共用 I2C2。 */

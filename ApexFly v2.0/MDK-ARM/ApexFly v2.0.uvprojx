@@ -333,7 +333,7 @@
               <MiscControls />
               <Define>USE_HAL_DRIVER,STM32G474xx</Define>
               <Undefine />
-              <IncludePath>../Core/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/Device/ST/STM32G4xx/Include;../Drivers/CMSIS/Include;../Modules/De_Bug;../Modules/IMU;../Modules/Motor;../Modules/LED;../Modules/Control;../Modules/Communication;../Modules/Flash;../Modules/Power;../Modules/GPS;../Modules/Mag;../Modules/ToF</IncludePath>
+              <IncludePath>../Core/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc;../Drivers/STM32G4xx_HAL_Driver/Inc/Legacy;../Middlewares/Third_Party/FreeRTOS/Source/include;../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2;../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM4F;../Drivers/CMSIS/Device/ST/STM32G4xx/Include;../Drivers/CMSIS/Include;../Modules/De_Bug;../Modules/IMU;../Modules/Motor;../Modules/LED;../Modules/Control;../Modules/Communication;../Modules/Flash;../Modules/Power;../Modules/GPS;../Modules/Mag;../Modules/ToF;../Modules/Flow</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -981,6 +981,31 @@
               <FileName>tof.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\Modules\ToF\tof.h</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>Modules/Flow</GroupName>
+          <Files>
+            <File>
+              <FileName>flow_cxof.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Modules\Flow\flow_cxof.c</FilePath>
+            </File>
+            <File>
+              <FileName>flow_cxof.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Modules\Flow\flow_cxof.h</FilePath>
+            </File>
+            <File>
+              <FileName>flow.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Modules\Flow\flow.c</FilePath>
+            </File>
+            <File>
+              <FileName>flow.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Modules\Flow\flow.h</FilePath>
             </File>
           </Files>
         </Group>

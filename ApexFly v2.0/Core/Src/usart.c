@@ -21,7 +21,9 @@
 #include "usart.h"
 
 /* USER CODE BEGIN 0 */
-
+/* USART2 的波特率不再写死：它现在是"GPS(9600) 还是光流(19200)"由
+   `APEX_UART2_ROLE_FLOW` 决定。见 Core/Inc/apex_config.h 里的完整说明。 */
+#include "apex_config.h"
 /* USER CODE END 0 */
 
 UART_HandleTypeDef huart2;
@@ -41,7 +43,12 @@ void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 9600;
+  /* ⚠️⚠️ 这一行是**手工改过**的（原来是写死的 9600），而且它**不在 USER CODE 区里**。
+     一旦用 CubeMX 重新生成这个文件，它会被打回 9600 —— 那时光流会一帧都收不到
+     （现象是 [OF] 行的 n 一直是 0），GPS 换成光流也白搭。
+     ⇒ 重新生成过 CubeMX 之后，必须回来确认这一行还是 APEX_UART2_BAUD。
+     见 Core/Inc/apex_config.h。 */
+  huart2.Init.BaudRate = APEX_UART2_BAUD;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;

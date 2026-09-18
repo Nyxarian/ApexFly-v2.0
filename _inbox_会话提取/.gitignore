@@ -3,7 +3,12 @@
 # ⚠️ 例外：**验证工具链的源码**用 `git add -f` 强制纳入了版本控制（不是产品代码），
 #    因为 `优化一下/高度接入施工顺序.md` 按路径引用它们，不跟着仓库走的话换台机器就复现不了验证。
 #    已入库清单：
-#      sim_vc_h8/h9/h10/h12/h13.c   固件仿真（真实编译 vertical_control.c + pid.c）
+#      sim_vc_h8/h9/h10/h12/h13/h14.c  固件仿真（真实编译 vertical_control.c + pid.c）
+#      sim_flow.c                   光流仿真（真实编译 flow.c + flow_cxof.c，
+#                                   并用"反向控制"驱动**真的 Flow_Task**）
+#      flow_stub/                   光流仿真的桩头（main.h / cmsis_os.h / task.h）
+#      synchk_flow0/                "USART2 判给 GPS"用的 apex_config.h 覆盖版
+#                                   （放在 -I 第一位，用来验证 role=0 那条路径也能编过）
 #      sim_vertical_control.c       最早的 H6 状态机仿真
 #      sim_failsafe_ramp.js         失效慢降的物理仿真（定斜坡斜率用）
 #      sim_h13_takeoff.js           起飞时间线 / 延迟扫描 / 增益扫描

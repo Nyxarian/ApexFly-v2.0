@@ -4,10 +4,27 @@
  *
  * DMA 中断只把字节搬进环形缓冲。字符串校验和换算仍在任务中做。
  * 定位结果只给观察和以后用，当前不进控制环。
+ *
+ * ── ⚠️ USART2 现在归谁用是可切的（2026-09-18）────────────────
+ * 本板没留多余串口，而光流模块只需要一个 RX 脚，所以在把定点/定高做稳的这段时间里
+ * 把 GPS 摘下来、光流接到同一个座上（开关见 `Core/Inc/apex_config.h` 的
+ * `APEX_UART2_ROLE_FLOW`）。开关为 1 时，本文件里**碰 USART2 的东西全部编掉**：
+ * 三个静态收发辅助函数、`GPS_Task` 的任务体、以及下面那两个 HAL 回调。
+ *
+ * ⚠️ 那两个回调（`HAL_UARTEx_RxEventCallback` / `HAL_UART_ErrorCallback`）与
+ * `Modules/Flow/flow.c` 里的同名函数**必须互斥编译**，两边用同一个开关控制 ——
+ * 同时定义会报 `L6200E: Symbol HAL_UART_ErrorCallback multiply defined`
+ * （2026-09 做串口回显测试时同一个符号已经踩过一次）。
+ *
+ * ⚠️ 本文件**其余部分照常编译**：`GPS_GetData` / `GPS_GetUtcTime` /
+ * `GPS_UnixSecondsToCalendar` 仍被 radio.c 与 blackbox.c 调用。
+ * 摘掉 GPS 之后它们一律返回"无效"，于是黑匣子场次的 UTC 时间戳会写 0
+ * （用户已定：照原样显示、不做兜底；找日志按场次序号找）。
  */
 
 #include "gps.h"
 
+#include "apex_config.h"
 #include "cmsis_os.h"
 #include "usart.h"
 #include "FreeRTOS.h"
@@ -34,6 +51,9 @@ static volatile bool gps_dma_restart_required;
 static volatile uint32_t gps_dma_drop_count;
 static volatile uint32_t gps_uart_error_count;
 
+#if !APEX_UART2_ROLE_FLOW
+/* ⚠️ 下面这三个静态辅助函数只在"GPS 用 USART2"时才有意义。
+   USART2 归光流时必须一起编掉，否则它们会变成未使用的静态函数（-Wunused-function）。 */
 static void GPS_RingPushFromISR(const uint8_t *data, uint16_t length)
 {
     uint16_t index;
@@ -76,8 +96,20 @@ static HAL_StatusTypeDef GPS_StartDmaReception(void)
     return status;
 }
 
+#endif /* !APEX_UART2_ROLE_FLOW */
+
 void GPS_Task(void *argument)
 {
+#if APEX_UART2_ROLE_FLOW
+    /* USART2 归光流时本任务不该被创建（app_freertos.c 用同一个开关挡住了创建）。
+       万一真被创建，这里空转，**绝不碰 USART2** —— 否则会把光流的 DMA 抢掉。
+       空转而不是直接 return：任务返回会触发 FreeRTOS 的断言。 */
+    (void)argument;
+    for (;;)
+    {
+        osDelay(1000U);
+    }
+#else
     bool received_byte;
     uint8_t byte;
     GPS_Data_t data;
@@ -118,8 +150,10 @@ void GPS_Task(void *argument)
         if (!received_byte) osDelay(2U);
         else taskYIELD();
     }
+#endif /* APEX_UART2_ROLE_FLOW */
 }
 
+#if !APEX_UART2_ROLE_FLOW
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size)
 {
     HAL_UART_RxEventTypeTypeDef event_type;
@@ -156,6 +190,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     gps_dma_restart_required = true;
     gps_dma_running = false;
 }
+#endif /* !APEX_UART2_ROLE_FLOW */
 
 void GPS_GetData(GPS_Data_t *data)
 {
