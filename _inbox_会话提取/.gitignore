@@ -15,6 +15,12 @@
 #      verify_v.js / verify_h8.js   真机串口日志的自动判据
 #      gen_fake_v_log.js            判据自测的合成日志生成器（含 8 组对照组）
 #      synchk/、synchk_gcc/、sim_stub/   PC 上做语法检查用的桩头（GCC 兼容 portmacro 等）
+#      measure_session.js           量 DSH 会话文件的体积构成（按记录类别 + 最长记录）
+#      measure_usage.js             从会话文件抽**真实 token 用量**
+#                                   （`优化一下/会话交接.md` §11 那些成本数字的来源）
+#                                   ⚠️ 会话文件是**多帧拼接**的 zstd，Node 的 zstdDecompressSync
+#                                      只解第一帧就停 ⇒ 这两个脚本内联了帧边界解析
+#                                      （与既有 zstd_walk.js 同一套逻辑）
 #    将来改这些脚本时**直接正常 git add 即可**（已跟踪的文件不再受忽略规则影响）。
 #
 # 说明：这里不能用 `!/<目录名>/` 去放行中文目录名 —— gitignore 的 `?` 按**字节**匹配，
