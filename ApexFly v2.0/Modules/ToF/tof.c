@@ -354,7 +354,7 @@ void ToF_Task(void *argument)
                cal   = 0 未开始 / 1 采样中 / 2 已完成 / 3 失败待重来
                a     = 距最近一帧**合格**数据的毫秒数 */
             Flow_GetState(&flow_state);
-            Debug_Printf("[OF] n=%lu bad=%lu/%lu qrej=%lu | q=%u dx=%d dy=%d | z=%+.2f,%+.2f | sx=%+.1f sy=%+.1f | v=%u cal=%u a=%lums\r\n", (unsigned long)flow_state.frame_count, (unsigned long)flow_state.checksum_error_count, (unsigned long)flow_state.format_error_count, (unsigned long)flow_state.quality_reject_count, (unsigned)flow_state.quality, (int)flow_state.dx, (int)flow_state.dy, (double)flow_state.zero_x, (double)flow_state.zero_y, (double)flow_state.sum_x, (double)flow_state.sum_y, flow_state.valid ? 1U : 0U, (unsigned)flow_state.cal, (unsigned long)flow_state.age_ms);
+            Debug_Printf("[OF] n=%lu bad=%lu/%lu qrej=%lu | q=%u dx=%d dy=%d | z=%+.4f,%+.4f | sx=%+.1f sy=%+.1f | v=%u cal=%u a=%lums\r\n", (unsigned long)flow_state.frame_count, (unsigned long)flow_state.checksum_error_count, (unsigned long)flow_state.format_error_count, (unsigned long)flow_state.quality_reject_count, (unsigned)flow_state.quality, (int)flow_state.dx, (int)flow_state.dy, (double)flow_state.zero_x, (double)flow_state.zero_y, (double)flow_state.sum_x, (double)flow_state.sum_y, flow_state.valid ? 1U : 0U, (unsigned)flow_state.cal, (unsigned long)flow_state.age_ms);
         }
 
         /* 每步都让出 CPU：本任务与 magtask 共用 I2C2。 */

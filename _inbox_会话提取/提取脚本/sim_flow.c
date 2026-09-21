@@ -46,7 +46,7 @@
 
 /* ── 从 flow.c 抄过来的常量（改那边就必须改这里）── */
 #define FLOW_DMA_SIZE 256U          /* FLOW_DMA_BUFFER_SIZE */
-#define CAL_FRAMES 25U              /* FLOW_CAL_FRAMES */
+#define CAL_FRAMES 250U             /* FLOW_CAL_FRAMES */
 #define CAL_MAX_COUNT 100.0f        /* FLOW_CAL_MAX_COUNT */
 #define TIMEOUT_MS 200U             /* FLOW_TIMEOUT_MS */
 #define STEP_MS 40U                 /* 模拟的帧间隔（25Hz） */
@@ -278,9 +278,8 @@ static void Check_Quality(void)
 /* ── 4 零点标定成功 ── */
 static void Feed_CalOk(int step)
 {
-    /* 24 帧交替 ±1（和恰好为 0）+ 第 25 帧 0 ⇒ 均值**精确**为 0，便于精确断言。 */
-    if (step < 24) send_frame(((step % 2) == 0) ? 1 : -1, 0, 80);
-    else if (step == 24) send_frame(0, 0, 80);
+    /* 250 帧交替 ±1，偶数帧数保证均值**精确**为 0，便于精确断言。 */
+    if (step < (int)CAL_FRAMES) send_frame(((step % 2) == 0) ? 1 : -1, 0, 80);
 }
 static void Check_CalOk(void)
 {
@@ -344,8 +343,7 @@ static void Feed_CalGuard(int step)
     {
         int k = step - (int)CAL_FRAMES - 30;
 
-        if (k < 24) send_frame(((k % 2) == 0) ? 1 : -1, 0, 80);
-        else send_frame(0, 0, 80);
+        send_frame(((k % 2) == 0) ? 1 : -1, 0, 80);
     }
 }
 static void Check_CalGuard(void)
@@ -356,6 +354,25 @@ static void Check_CalGuard(void)
     check("6 ⭐ 失败后自动重来，最终标定成功", s.cal == (uint8_t)FLOW_CAL_DONE, NULL);
     check("6 ⭐⭐ 最终零点来自**第二次**采样（= 0），没有被 500 的坏采样污染",
           s.zero_x == 0.0f, NULL);
+}
+
+/* ── 6b 250 帧窗口把单个异常计数的影响压低 10 倍 ── */
+static void Feed_CalResolution(int step)
+{
+    /* 标定窗口第 1 帧给 -1，其余全 0；标定完成后再喂 250 帧 0。
+       25 帧旧窗口会得到 -0.04、随后漂 +10；250 帧应得到 -0.004、漂 +1。 */
+    if (step == 0) send_frame(-1, 0, 80);
+    else if (step < (int)(CAL_FRAMES * 2U)) send_frame(0, 0, 80);
+}
+static void Check_CalResolution(void)
+{
+    FlowState_t s = snap();
+
+    check("6b ⭐ 单个 -1 经 250 帧平均后零点 = -0.004",
+          (s.zero_x > -0.0041f) && (s.zero_x < -0.0039f), NULL);
+    check("6b ⭐ 随后 250 帧静止只累积约 +1（旧窗口会是 +10）",
+          (s.sum_x > 0.99f) && (s.sum_x < 1.01f), NULL);
+    check("6b Y 轴保持 0", (s.zero_y == 0.0f) && (s.sum_y == 0.0f), NULL);
 }
 
 /* ── 7 不变式 ── */
@@ -374,10 +391,11 @@ static const SimScenario_t SIM_SCENARIOS[] = {
     {"1 正常帧流 / DMA 绕回",        1, 30, Feed_Normal,    Check_Normal},
     {"2 解析边界（坏帧/半截/粘包）",  1,  9, Feed_Parse,     Check_Parse},
     {"3 质量门禁与边界",             1,  5, Feed_Quality,   Check_Quality},
-    {"4 零点标定成功",              1, 25, Feed_CalOk,     Check_CalOk},
+    {"4 零点标定成功",              1, (int)CAL_FRAMES, Feed_CalOk, Check_CalOk},
     {"5a 累积与质量冻结",            0, 14, Feed_Accum,     Check_Accum},
     {"5b 超时失效与恢复",            0, 10, Feed_Timeout,   Check_Timeout},
-    {"6 标定守卫与自动重试",          1, 81, Feed_CalGuard,  Check_CalGuard},
+    {"6 标定守卫与自动重试",          1, (int)(CAL_FRAMES * 2U + 30U), Feed_CalGuard, Check_CalGuard},
+    {"6b 长窗口分辨率回归",           1, (int)(CAL_FRAMES * 2U), Feed_CalResolution, Check_CalResolution},
     {"7 不变式",                    0,  2, NULL,            Check_Invariants},
 };
 #define SIM_SCENARIO_COUNT ((int)(sizeof(SIM_SCENARIOS) / sizeof(SIM_SCENARIOS[0])))
