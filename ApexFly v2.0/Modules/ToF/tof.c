@@ -355,17 +355,19 @@ void ToF_Task(void *argument)
             Flow_GetState(&flow_state);
             Debug_Printf("[OF] n=%lu bad=%lu/%lu qrej=%lu | q=%u dx=%d dy=%d | z=%+.4f,%+.4f | sx=%+.1f sy=%+.1f | v=%u cal=%u a=%lums\r\n", (unsigned long)flow_state.frame_count, (unsigned long)flow_state.checksum_error_count, (unsigned long)flow_state.format_error_count, (unsigned long)flow_state.quality_reject_count, (unsigned)flow_state.quality, (int)flow_state.dx, (int)flow_state.dy, (double)flow_state.zero_x, (double)flow_state.zero_y, (double)flow_state.sum_x, (double)flow_state.sum_y, flow_state.valid ? 1U : 0U, (unsigned)flow_state.cal, (unsigned long)flow_state.age_ms);
 
-            /* ── OF6 位置/速度两级环（只算不下发）────────────────────
+            /* ── OF8 位置/速度两级环与安全门禁（仍只算不下发）────────
                n      = 速度环 / 位置环更新次数，约应为 2:1
                ok     = 光流有效且零点标定完成；否则输出强制为 0
+               fr     = 最近一次安全退出原因：0 无、1 光流、2 链路、3 姿态、4 高度、5 许可
                p/v/sp = 旋到机体系后的前、右位置 / 速度 / 目标速度
                raw    = 速度环原始 roll,pitch 角；out 是 2.5Hz 低通后的角
                ⚠️ out 仅供台架判方向，绝不写 AttitudeControl_Update。 */
             PositionControl_GetSnapshot(&position_control_state);
-            Debug_Printf("[PC] req=%u gate=0x%02X st=%u n=%lu/%lu ok=%u | p=%+.1f,%+.1f v=%+.1f,%+.1f sp=%+.1f,%+.1f | raw=%+.2f,%+.2f out=%+.2f,%+.2f\r\n",
+            Debug_Printf("[PC] req=%u gate=0x%02X st=%u fr=%u n=%lu/%lu ok=%u | p=%+.1f,%+.1f v=%+.1f,%+.1f sp=%+.1f,%+.1f | raw=%+.2f,%+.2f out=%+.2f,%+.2f\r\n",
                          position_control_state.request ? 1U : 0U,
                          (unsigned)position_control_state.gate_mask,
                          (unsigned)position_control_state.state,
+                         (unsigned)position_control_state.fault_reason,
                          (unsigned long)position_control_state.velocity_update_count,
                          (unsigned long)position_control_state.position_update_count,
                          position_control_state.valid ? 1U : 0U,

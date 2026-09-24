@@ -68,9 +68,11 @@
 #define BLACKBOX_RECORD_TYPE_SAMPLE 2U
 #define BLACKBOX_RECORD_TYPE_SESSION_END 3U
 #define BLACKBOX_RECORD_TYPE_ALTITUDE_PARAMS 4U
+#define BLACKBOX_RECORD_TYPE_POSITION_SAMPLE 5U
 #define BLACKBOX_RECORD_SIZE 64U
 #define BLACKBOX_RECORD_CRC_OFFSET 60U
 #define BLACKBOX_SAMPLE_QUEUE_LENGTH 32U
+#define BLACKBOX_POSITION_SAMPLE_PERIOD_MS 80U
 
 #define BLACKBOX_UART (&huart3)
 #define BLACKBOX_COMMAND_BUFFER_SIZE 40U
@@ -199,6 +201,34 @@ typedef struct
     uint8_t schema;
     uint16_t session_id;
     uint32_t t_ms;
+    int16_t flow_dx;
+    int16_t flow_dy;
+    uint16_t status;
+    int32_t flow_sum_x_q10;
+    int32_t flow_sum_y_q10;
+    int32_t flow_zero_x_q1000;
+    int32_t flow_zero_y_q1000;
+    int32_t velocity_forward_q10;
+    int32_t velocity_right_q10;
+    int32_t velocity_forward_sp_q10;
+    int32_t velocity_right_sp_q10;
+    int16_t raw_roll_cdeg;
+    int16_t raw_pitch_cdeg;
+    int16_t roll_cdeg;
+    int16_t pitch_cdeg;
+    uint8_t flow_quality;
+    uint8_t reserved0;
+    uint16_t crc16;
+    uint16_t reserved1;
+} BlackboxPositionRecord_t;
+
+typedef struct
+{
+    uint32_t magic;
+    uint8_t type;
+    uint8_t schema;
+    uint16_t session_id;
+    uint32_t t_ms;
     uint16_t sample_count;
     uint16_t reserved0;
     uint32_t utc_seconds;
@@ -214,6 +244,7 @@ typedef union
     BlackboxSessionBeginRecord_t begin;
     BlackboxAltitudeParamsRecord_t altitude;
     BlackboxSampleRecord_t sample;
+    BlackboxPositionRecord_t position;
     BlackboxSessionEndRecord_t end;
 } BlackboxFlashRecord_t;
 
@@ -255,6 +286,7 @@ typedef enum
 {
     BLACKBOX_JOB_NONE = 0,
     BLACKBOX_JOB_SAMPLE,
+    BLACKBOX_JOB_POSITION_SAMPLE,
     BLACKBOX_JOB_SAVE,
     BLACKBOX_JOB_SAVE_MAG_CAL,
     BLACKBOX_JOB_ARM,
@@ -265,6 +297,7 @@ typedef struct
 {
     BlackboxJobType_t type;
     BlackboxSample_t sample;
+    BlackboxPositionSample_t position;
 } BlackboxJob_t;
 
 static W25Q64_Device_t blackbox_flash;
@@ -297,6 +330,7 @@ typedef char BlackboxParameterRecordMustFit[(sizeof(BlackboxParameterRecord_t) <
 typedef char BlackboxSessionBeginMustBe64[(sizeof(BlackboxSessionBeginRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxAltitudeParamsMustBe64[(sizeof(BlackboxAltitudeParamsRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxSampleMustBe64[(sizeof(BlackboxSampleRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
+typedef char BlackboxPositionMustBe64[(sizeof(BlackboxPositionRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxSessionEndMustBe64[(sizeof(BlackboxSessionEndRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxFlashRecordMustBe64[(sizeof(BlackboxFlashRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxLogIndexMustFit[(sizeof(BlackboxLogIndexRecord_t) <= BLACKBOX_LOG_INDEX_RECORD_SIZE) ? 1 : -1];
@@ -388,6 +422,22 @@ static bool Blackbox_QueueJob(BlackboxJobType_t type, const BlackboxSample_t *sa
     if (xQueueSend(blackbox_queue, &job, 0) != pdTRUE)
     {
         if (type == BLACKBOX_JOB_SAMPLE) blackbox_dropped_samples++;
+        return false;
+    }
+    return true;
+}
+
+static bool Blackbox_QueuePositionJob(const BlackboxPositionSample_t *sample)
+{
+    BlackboxJob_t job;
+
+    if ((blackbox_queue == NULL) || (sample == NULL)) return false;
+    memset(&job, 0, sizeof(job));
+    job.type = BLACKBOX_JOB_POSITION_SAMPLE;
+    job.position = *sample;
+    if (xQueueSend(blackbox_queue, &job, 0) != pdTRUE)
+    {
+        blackbox_dropped_samples++;
         return false;
     }
     return true;
@@ -886,6 +936,40 @@ static bool Blackbox_WriteSample(const BlackboxSample_t *sample)
     return true;
 }
 
+static bool Blackbox_WritePositionSample(const BlackboxPositionSample_t *sample)
+{
+    BlackboxFlashRecord_t record;
+    uint16_t status;
+
+    memset(&record, 0, sizeof(record));
+    record.position.magic = BLACKBOX_RECORD_MAGIC;
+    record.position.type = BLACKBOX_RECORD_TYPE_POSITION_SAMPLE;
+    record.position.schema = BLACKBOX_RECORD_SCHEMA;
+    record.position.session_id = blackbox_active_session_id;
+    record.position.t_ms = (uint32_t)(sample->source_tick - blackbox_session_start_tick);
+    record.position.flow_dx = sample->flow_dx;
+    record.position.flow_dy = sample->flow_dy;
+    status = (uint16_t)(sample->state & 0x07U);
+    status |= (uint16_t)((sample->flow_valid ? 1U : 0U) << 3U);
+    status |= (uint16_t)((sample->gate_mask & 0x1FU) << 4U);
+    status |= (uint16_t)((sample->fault_reason & 0x07U) << 9U);
+    record.position.status = status;
+    record.position.flow_sum_x_q10 = sample->flow_sum_x_q10;
+    record.position.flow_sum_y_q10 = sample->flow_sum_y_q10;
+    record.position.flow_zero_x_q1000 = sample->flow_zero_x_q1000;
+    record.position.flow_zero_y_q1000 = sample->flow_zero_y_q1000;
+    record.position.velocity_forward_q10 = sample->velocity_forward_q10;
+    record.position.velocity_right_q10 = sample->velocity_right_q10;
+    record.position.velocity_forward_sp_q10 = sample->velocity_forward_sp_q10;
+    record.position.velocity_right_sp_q10 = sample->velocity_right_sp_q10;
+    record.position.raw_roll_cdeg = sample->raw_roll_cdeg;
+    record.position.raw_pitch_cdeg = sample->raw_pitch_cdeg;
+    record.position.roll_cdeg = sample->roll_cdeg;
+    record.position.pitch_cdeg = sample->pitch_cdeg;
+    record.position.flow_quality = sample->flow_quality;
+    return Blackbox_AppendRecord(record.bytes);
+}
+
 static void Blackbox_HandleSave(void)
 {
     int32_t values[APEX_PID_PARAMETER_COUNT];
@@ -976,6 +1060,7 @@ static void Blackbox_PrintPidHeader(uint16_t session_id, uint32_t utc_seconds, c
         (void)Debug_Send((const uint8_t *)line, (uint16_t)length);
     }
     Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,vz_target_cms,alt_state,armed,conn\r\n");
+    Debug_Printf("# position_log\r\npos_t_ms,flow_dx,flow_dy,flow_q,flow_valid,flow_sum_x,flow_sum_y,flow_zero_x,flow_zero_y,vel_f,vel_r,vel_sp_f,vel_sp_r,raw_roll,raw_pitch,roll,pitch,pc_state,pc_gate,pc_fault\r\n");
 }
 
 static void Blackbox_PrintSample(const BlackboxFlashRecord_t *record)
@@ -1018,6 +1103,37 @@ static void Blackbox_PrintSample(const BlackboxFlashRecord_t *record)
     Debug_Printf("%lu,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d,%d,%d,%u,%u,%u,%u,%u,%d,%d,%.2f,%d,%d,%u,%u,%u\r\n", (unsigned long)record->sample.t_ms, (double)record->sample.roll_cdeg / 100.0, (double)record->sample.pitch_cdeg / 100.0, (double)record->sample.yaw_cdeg / 100.0, (double)record->sample.roll_rate_cdps / 100.0, (double)record->sample.pitch_rate_cdps / 100.0, (double)record->sample.yaw_rate_cdps / 100.0, (int)record->sample.roll_corr_us, (int)record->sample.pitch_corr_us, (int)record->sample.yaw_corr_us, (unsigned int)record->sample.throttle_us, (unsigned int)record->sample.motor_us[0], (unsigned int)record->sample.motor_us[1], (unsigned int)record->sample.motor_us[2], (unsigned int)record->sample.motor_us[3], (int)altitude_cm, (int)vz_cms, (mag_heading_cdeg < 0) ? -1.0 : ((double)mag_heading_cdeg / 100.0), (int)vz_correction_us, (int)vz_target_cms, (unsigned int)altitude_state, (unsigned int)armed, (unsigned int)connected);
 }
 
+static void Blackbox_PrintPositionSample(const BlackboxFlashRecord_t *record)
+{
+    uint16_t status = record->position.status;
+    uint8_t state = (uint8_t)(status & 0x07U);
+    uint8_t flow_valid = (uint8_t)((status >> 3U) & 0x01U);
+    uint8_t gate_mask = (uint8_t)((status >> 4U) & 0x1FU);
+    uint8_t fault_reason = (uint8_t)((status >> 9U) & 0x07U);
+
+    Debug_Printf("%lu,%d,%d,%u,%u,%.1f,%.1f,%.4f,%.4f,%.1f,%.1f,%.1f,%.1f,%.2f,%.2f,%.2f,%.2f,%u,0x%02X,%u\r\n",
+                 (unsigned long)record->position.t_ms,
+                 (int)record->position.flow_dx,
+                 (int)record->position.flow_dy,
+                 (unsigned int)record->position.flow_quality,
+                 (unsigned int)flow_valid,
+                 (double)record->position.flow_sum_x_q10 / 10.0,
+                 (double)record->position.flow_sum_y_q10 / 10.0,
+                 (double)record->position.flow_zero_x_q1000 / 1000.0,
+                 (double)record->position.flow_zero_y_q1000 / 1000.0,
+                 (double)record->position.velocity_forward_q10 / 10.0,
+                 (double)record->position.velocity_right_q10 / 10.0,
+                 (double)record->position.velocity_forward_sp_q10 / 10.0,
+                 (double)record->position.velocity_right_sp_q10 / 10.0,
+                 (double)record->position.raw_roll_cdeg / 100.0,
+                 (double)record->position.raw_pitch_cdeg / 100.0,
+                 (double)record->position.roll_cdeg / 100.0,
+                 (double)record->position.pitch_cdeg / 100.0,
+                 (unsigned int)state,
+                 (unsigned int)gate_mask,
+                 (unsigned int)fault_reason);
+}
+
 static uint32_t Blackbox_DumpStartAddress(uint32_t max_records)
 {
     uint32_t used = Blackbox_LogUsedRecords();
@@ -1046,6 +1162,7 @@ static void Blackbox_DumpLogs(uint32_t max_records)
     uint32_t total;
     uint32_t scanned = 0U;
     uint32_t samples = 0U;
+    uint32_t position_samples = 0U;
     uint32_t sessions = 0U;
     uint16_t pending_session_id = 0U;
     int16_t pending_pid_q100[BLACKBOX_SESSION_PID_PARAMETER_COUNT];
@@ -1119,12 +1236,26 @@ static void Blackbox_DumpLogs(uint32_t max_records)
             {
                 Debug_Printf("# session=0 t0_utc=NA unix=0\r\n");
                 Debug_Printf("t_ms,roll,pitch,yaw,roll_rate,pitch_rate,yaw_rate,roll_corr,pitch_corr,yaw_corr,thr,m1,m2,m3,m4,alt_cm,vz_cms,mag_hdg,vz_corr_us,vz_target_cms,alt_state,armed,conn\r\n");
+                Debug_Printf("# position_log\r\npos_t_ms,flow_dx,flow_dy,flow_q,flow_valid,flow_sum_x,flow_sum_y,flow_zero_x,flow_zero_y,vel_f,vel_r,vel_sp_f,vel_sp_r,raw_roll,raw_pitch,roll,pitch,pc_state,pc_gate,pc_fault\r\n");
                 printed_orphan_header = true;
             }
             if (in_session || printed_orphan_header)
             {
                 samples++;
                 Blackbox_PrintSample(&record);
+            }
+        }
+        else if (record.position.type == BLACKBOX_RECORD_TYPE_POSITION_SAMPLE)
+        {
+            if (pending_session_header)
+            {
+                Blackbox_PrintPidHeader(pending_session_id, 0U, pending_pid_q100);
+                pending_session_header = false;
+            }
+            if (in_session || printed_orphan_header)
+            {
+                position_samples++;
+                Blackbox_PrintPositionSample(&record);
             }
         }
         else if (record.end.type == BLACKBOX_RECORD_TYPE_SESSION_END)
@@ -1143,7 +1274,7 @@ static void Blackbox_DumpLogs(uint32_t max_records)
         if ((scanned % 8U) == 0U) vTaskDelay(1);
     }
     if (pending_session_header) Blackbox_PrintPidHeader(pending_session_id, 0U, pending_pid_q100);
-    Debug_Printf("[BB] dump done scanned=%lu samples=%lu sessions=%lu.\r\n", (unsigned long)scanned, (unsigned long)samples, (unsigned long)sessions);
+    Debug_Printf("[BB] dump done scanned=%lu samples=%lu position=%lu sessions=%lu.\r\n", (unsigned long)scanned, (unsigned long)samples, (unsigned long)position_samples, (unsigned long)sessions);
     blackbox_dumping = false;
 }
 
@@ -1460,6 +1591,12 @@ void Blackbox_SubmitSample(const BlackboxSample_t *sample)
     (void)Blackbox_QueueJob(BLACKBOX_JOB_SAMPLE, sample);
 }
 
+void Blackbox_SubmitPositionSample(const BlackboxPositionSample_t *sample)
+{
+    if ((sample == NULL) || !blackbox_recording) return;
+    (void)Blackbox_QueuePositionJob(sample);
+}
+
 void Blackbox_Task(void *argument)
 {
     BlackboxJob_t job;
@@ -1487,6 +1624,14 @@ void Blackbox_Task(void *argument)
                     {
                         blackbox_recording = false;
                         Debug_Printf("[BB] write fail, stop.\r\n");
+                    }
+                }
+                else if ((job.type == BLACKBOX_JOB_POSITION_SAMPLE) && blackbox_recording)
+                {
+                    if (!Blackbox_WritePositionSample(&job.position))
+                    {
+                        blackbox_recording = false;
+                        Debug_Printf("[BB] position write fail, stop.\r\n");
                     }
                 }
             }

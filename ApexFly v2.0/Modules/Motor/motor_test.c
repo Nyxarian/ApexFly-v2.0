@@ -42,6 +42,7 @@
 #include "motor.h"
 #include "mpu6050.h"
 #include "pid_table.h"
+#include "position_control.h"
 #include "radio.h"
 #include "semphr.h"
 #include "task.h"
@@ -286,6 +287,9 @@ void MotorTest_Task(void *argument)
     bool level_ready;
     bool armed;
     bool was_armed;
+    bool position_control_permission;
+    bool position_attitude_safe;
+    bool position_height_safe;
     uint16_t throttle_us;
     uint16_t throttle_target_us;
     uint32_t last_imu_cycles;
@@ -355,6 +359,7 @@ void MotorTest_Task(void *argument)
         VerticalEst_Init();
         /* 定高的模式状态机也跟着冷复位：模式回普通、h_sp 归零、停手计时清零。 */
         VerticalControl_Init();
+        PositionControl_SetSafetyContext(false, false, false);
         bias_ready = false;
         level_ready = false;
         was_armed = false;
@@ -392,6 +397,7 @@ void MotorTest_Task(void *argument)
                 {
                     continue;
                 }
+                PositionControl_SetSafetyContext(false, false, false);
                 if (was_armed) Blackbox_NotifyDisarmed();
                 Motor_Disarm();
                 Radio_PublishFlightState(0.0f, 0.0f, 0.0f, MOTOR_PWM_MIN_US, 0, 0, false, true, false);
@@ -484,6 +490,15 @@ void MotorTest_Task(void *argument)
                "空中失联"误判成"在地面上"。 */
             VerticalControl_Update(link.command.flight_mode, link.command.throttle, (link.connected && link.command_valid), armed, body.roll_deg, body.pitch_deg, control_dt_s);
             VerticalControl_GetSnapshot(&vertical_control_state);
+
+            position_control_permission = armed && AttitudeControl_IsInnerLoopEnabled();
+            position_attitude_safe = (MotorTest_Absf(body.roll_deg) < VERTICAL_CONTROL_MAX_TILT_DEG) &&
+                                      (MotorTest_Absf(body.pitch_deg) < VERTICAL_CONTROL_MAX_TILT_DEG);
+            position_height_safe = vertical_control_state.est_valid &&
+                                   (vertical_control_state.h_est_cm <= VERTICAL_MODE_MAX_HEIGHT_CM);
+            PositionControl_SetSafetyContext(position_control_permission,
+                                             position_attitude_safe,
+                                             position_height_safe);
 
             if (!armed)
             {

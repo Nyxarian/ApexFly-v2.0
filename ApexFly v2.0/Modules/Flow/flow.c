@@ -22,6 +22,7 @@
 #include "flow.h"
 
 #include "apex_config.h"
+#include "blackbox.h"
 #include "cmsis_os.h"
 #include "control_link.h"
 #include "flow_cxof.h"
@@ -31,6 +32,7 @@
 #include "usart.h"
 
 #include <stddef.h>
+#include <string.h>
 
 /* DMA 缓冲大小。25Hz × 9 字节 ≈ 225 字节/秒，256 已经非常宽松。 */
 #define FLOW_DMA_BUFFER_SIZE 256U
@@ -93,6 +95,7 @@ static uint32_t flow_last_frame_tick;
 static uint8_t flow_quality_bad_streak;
 static bool flow_ever_got_frame;
 static bool flow_sticks_centered;
+static uint32_t flow_last_position_log_tick;
 
 #define FLOW_STICK_CENTER_ENTER 30
 #define FLOW_STICK_CENTER_EXIT 50
@@ -101,6 +104,47 @@ static bool flow_sticks_centered;
 static float Flow_Absf(float value)
 {
     return (value < 0.0f) ? -value : value;
+}
+
+static int32_t Flow_ScaleToI32(float value, float scale)
+{
+    float scaled = value * scale;
+
+    if (scaled >= 2147483647.0f) return INT32_MAX;
+    if (scaled <= -2147483648.0f) return INT32_MIN;
+    return (int32_t)scaled;
+}
+
+static void Flow_SubmitPositionBlackbox(uint32_t source_tick)
+{
+    FlowState_t flow_state;
+    PositionControlSnapshot_t position_state;
+    BlackboxPositionSample_t sample;
+
+    Flow_GetState(&flow_state);
+    PositionControl_GetSnapshot(&position_state);
+    memset(&sample, 0, sizeof(sample));
+    sample.source_tick = source_tick;
+    sample.flow_dx = flow_state.dx;
+    sample.flow_dy = flow_state.dy;
+    sample.flow_quality = flow_state.quality;
+    sample.flow_valid = flow_state.valid ? 1U : 0U;
+    sample.flow_sum_x_q10 = Flow_ScaleToI32(flow_state.sum_x, 10.0f);
+    sample.flow_sum_y_q10 = Flow_ScaleToI32(flow_state.sum_y, 10.0f);
+    sample.flow_zero_x_q1000 = Flow_ScaleToI32(flow_state.zero_x, 1000.0f);
+    sample.flow_zero_y_q1000 = Flow_ScaleToI32(flow_state.zero_y, 1000.0f);
+    sample.velocity_forward_q10 = Flow_ScaleToI32(position_state.velocity_forward_cps, 10.0f);
+    sample.velocity_right_q10 = Flow_ScaleToI32(position_state.velocity_right_cps, 10.0f);
+    sample.velocity_forward_sp_q10 = Flow_ScaleToI32(position_state.velocity_forward_sp_cps, 10.0f);
+    sample.velocity_right_sp_q10 = Flow_ScaleToI32(position_state.velocity_right_sp_cps, 10.0f);
+    sample.raw_roll_cdeg = (int16_t)Flow_ScaleToI32(position_state.raw_roll_deg, 100.0f);
+    sample.raw_pitch_cdeg = (int16_t)Flow_ScaleToI32(position_state.raw_pitch_deg, 100.0f);
+    sample.roll_cdeg = (int16_t)Flow_ScaleToI32(position_state.roll_deg, 100.0f);
+    sample.pitch_cdeg = (int16_t)Flow_ScaleToI32(position_state.pitch_deg, 100.0f);
+    sample.state = position_state.state;
+    sample.gate_mask = position_state.gate_mask;
+    sample.fault_reason = position_state.fault_reason;
+    Blackbox_SubmitPositionSample(&sample);
 }
 
 static bool Flow_SticksCentered(const ControlLinkSnapshot_t *link)
@@ -127,7 +171,7 @@ static void Flow_UpdatePositionContext(void)
         PositionControl_SetRequest((link.command.flags & APEX_CONTROL_FLAG_POSITION_HOLD_REQUESTED) != 0U);
     }
     flow_sticks_centered = Flow_SticksCentered(&link);
-    PositionControl_SetGateContext(link_ok, flow_sticks_centered, true);
+    PositionControl_SetPilotContext(link_ok, flow_sticks_centered);
 }
 
 static void Flow_RingPushFromISR(const uint8_t *data, uint16_t length)
@@ -344,6 +388,7 @@ void Flow_Init(void)
     flow_quality_bad_streak = 0U;
     flow_ever_got_frame = false;
     flow_sticks_centered = true;
+    flow_last_position_log_tick = 0U;
 
     flow_zero_x = 0.0f;
     flow_zero_y = 0.0f;
@@ -441,6 +486,16 @@ void Flow_Task(void *argument)
             PositionControlSnapshot_t position_state;
             PositionControl_GetSnapshot(&position_state);
             Radio_PublishPositionState(position_state.state);
+        }
+
+        {
+            uint32_t now = osKernelGetTickCount();
+
+            if ((uint32_t)(now - flow_last_position_log_tick) >= 80U)
+            {
+                flow_last_position_log_tick = now;
+                Flow_SubmitPositionBlackbox(now);
+            }
         }
 
         if (!received_byte) osDelay(FLOW_POLL_MS);

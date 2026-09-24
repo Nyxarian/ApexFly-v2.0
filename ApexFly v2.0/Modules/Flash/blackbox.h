@@ -85,6 +85,35 @@ typedef struct
 } BlackboxSample_t;
 
 /**
+ * @brief 一条定点扩展样本。以定点任务的 25Hz 数据为源，约 12.5Hz 入队。
+ *        数值先在 Flow 任务里按固定比例量化，Flash 记录仍保持 64 字节。
+ */
+typedef struct
+{
+    /* Flow 任务采样时的系统 tick；黑匣子写入时换算成场次相对时间。 */
+    uint32_t source_tick;
+    int16_t flow_dx;
+    int16_t flow_dy;
+    uint8_t flow_quality;
+    uint8_t flow_valid;
+    int32_t flow_sum_x_q10;
+    int32_t flow_sum_y_q10;
+    int32_t flow_zero_x_q1000;
+    int32_t flow_zero_y_q1000;
+    int32_t velocity_forward_q10;
+    int32_t velocity_right_q10;
+    int32_t velocity_forward_sp_q10;
+    int32_t velocity_right_sp_q10;
+    int16_t raw_roll_cdeg;
+    int16_t raw_pitch_cdeg;
+    int16_t roll_cdeg;
+    int16_t pitch_cdeg;
+    uint8_t state;
+    uint8_t gate_mask;
+    uint8_t fault_reason;
+} BlackboxPositionSample_t;
+
+/**
  * @brief 黑匣子任务入口。初始化 W25Q64，上电加载 PID，之后处理保存、记录和 dump。
  * @param argument 未使用。
  */
@@ -145,6 +174,11 @@ void Blackbox_NotifyDisarmed(void);
  * @param sample 已经填好的控制样本。
  */
 void Blackbox_SubmitSample(const BlackboxSample_t *sample);
+
+/**
+ * @brief 把一条定点扩展样本丢进队列。队列满则丢弃，不阻塞光流任务。
+ */
+void Blackbox_SubmitPositionSample(const BlackboxPositionSample_t *sample);
 
 #ifdef __cplusplus
 }

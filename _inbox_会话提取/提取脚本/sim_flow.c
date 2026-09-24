@@ -34,6 +34,7 @@
  *    真实 Quality 水平、厂区地面纹理够不够、真实零偏有多大。 */
 
 #include "flow.h"
+#include "blackbox.h"
 #include "position_control.h"
 #include "control_link.h"
 #include "apex_config.h"
@@ -109,6 +110,11 @@ void ControlLink_GetSnapshot(ControlLinkSnapshot_t *snapshot)
 void Radio_PublishPositionState(uint8_t position_state)
 {
     (void)position_state;
+}
+
+void Blackbox_SubmitPositionSample(const BlackboxPositionSample_t *sample)
+{
+    (void)sample;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -450,6 +456,7 @@ static void Scenario_Enter(int index)
            顺带会把 DMA 标志清掉，于是任务下一拍会重新调 ReceiveToIdle_DMA
            （桩会重新抓缓冲指针、写指针归零）。 */
         Flow_Init();
+        PositionControl_SetSafetyContext(true, true, true);
     }
 }
 

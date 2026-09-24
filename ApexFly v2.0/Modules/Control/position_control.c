@@ -33,7 +33,10 @@ static uint8_t position_outer_divider;
 static bool position_request;
 static bool position_link_ok;
 static bool position_sticks_centered;
-static bool position_control_permission;
+static volatile bool position_control_permission;
+static volatile bool position_attitude_safe;
+static volatile bool position_height_safe;
+static volatile bool position_safety_context_valid;
 static bool position_flow_available;
 static bool position_latched;
 static uint8_t position_recenter_frames;
@@ -67,6 +70,12 @@ static void PositionControl_LatchOff(void)
     PositionControl_ResetOutput();
 }
 
+static void PositionControl_LatchOffWithReason(uint8_t reason)
+{
+    position_snapshot.fault_reason = reason;
+    PositionControl_LatchOff();
+}
+
 static uint8_t PositionControl_GetGateMask(void)
 {
     uint8_t mask = 0U;
@@ -75,8 +84,29 @@ static uint8_t PositionControl_GetGateMask(void)
     if (position_link_ok) mask |= POSITION_CONTROL_GATE_LINK;
     if (position_flow_available) mask |= POSITION_CONTROL_GATE_FLOW;
     if (position_sticks_centered) mask |= POSITION_CONTROL_GATE_STICKS;
-    if (position_control_permission) mask |= POSITION_CONTROL_GATE_PERMISSION;
+    if (position_safety_context_valid && position_control_permission &&
+        position_attitude_safe && position_height_safe)
+    {
+        mask |= POSITION_CONTROL_GATE_PERMISSION;
+    }
     return mask;
+}
+
+static uint8_t PositionControl_GetSafetyFault(void)
+{
+    if (!position_safety_context_valid || !position_control_permission)
+    {
+        return (uint8_t)POSITION_CONTROL_FAULT_PERMISSION;
+    }
+    if (!position_attitude_safe)
+    {
+        return (uint8_t)POSITION_CONTROL_FAULT_ATTITUDE;
+    }
+    if (!position_height_safe)
+    {
+        return (uint8_t)POSITION_CONTROL_FAULT_HEIGHT;
+    }
+    return (uint8_t)POSITION_CONTROL_FAULT_NONE;
 }
 
 static bool PositionControl_AllGatesOpen(uint8_t mask)
@@ -93,7 +123,10 @@ void PositionControl_Init(void)
     position_request = POSITION_CONTROL_DIAGNOSTIC_REQUEST_DEFAULT;
     position_link_ok = true;
     position_sticks_centered = true;
-    position_control_permission = true;
+    position_control_permission = false;
+    position_attitude_safe = false;
+    position_height_safe = false;
+    position_safety_context_valid = false;
     position_flow_available = false;
     position_latched = false;
     position_recenter_frames = 0U;
@@ -112,6 +145,7 @@ void PositionControl_Init(void)
     position_snapshot.velocity_right_cps = 0.0f;
     position_snapshot.anchor_x_counts = 0.0f;
     position_snapshot.anchor_y_counts = 0.0f;
+    position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_NONE;
     PositionControl_ResetOutput();
 }
 
@@ -126,30 +160,25 @@ void PositionControl_SetRequest(bool requested)
         position_anchor_x = 0.0f;
         position_anchor_y = 0.0f;
         position_recenter_frames = 0U;
+        position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_NONE;
         position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_DISABLED;
         PositionControl_ResetOutput();
     }
 }
 
-void PositionControl_SetGateContext(bool link_ok, bool sticks_centered, bool control_permission)
+void PositionControl_SetPilotContext(bool link_ok, bool sticks_centered)
 {
     position_link_ok = link_ok;
     position_sticks_centered = sticks_centered;
-    position_control_permission = control_permission;
     position_snapshot.gate_mask = PositionControl_GetGateMask();
+}
 
-    if ((position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_ACTIVE ||
-         position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_PILOT_MOVE) &&
-        (!link_ok || !control_permission))
-    {
-        PositionControl_LatchOff();
-    }
-    else if ((position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_ACTIVE) && !sticks_centered)
-    {
-        position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_PILOT_MOVE;
-        position_recenter_frames = 0U;
-        PositionControl_ResetOutput();
-    }
+void PositionControl_SetSafetyContext(bool control_permission, bool attitude_safe, bool height_safe)
+{
+    position_control_permission = control_permission;
+    position_attitude_safe = attitude_safe;
+    position_height_safe = height_safe;
+    position_safety_context_valid = true;
 }
 
 void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps, float dt_s)
@@ -159,6 +188,7 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
     float rotated_velocity_forward;
     float rotated_velocity_right;
     uint8_t gate_mask;
+    uint8_t safety_fault;
     float alpha;
     float velocity_forward_error;
     float velocity_right_error;
@@ -185,14 +215,40 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
     if (!position_request)
     {
         position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_DISABLED;
+        position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_NONE;
         PositionControl_ResetOutput();
         return;
     }
 
-    if (!position_link_ok || !position_flow_available || !position_control_permission)
+    if (!position_link_ok)
     {
-        position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_WAITING;
-        PositionControl_ResetOutput();
+        if ((position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_ACTIVE) ||
+            (position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_PILOT_MOVE))
+        {
+            PositionControl_LatchOffWithReason((uint8_t)POSITION_CONTROL_FAULT_LINK);
+        }
+        else
+        {
+            position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_WAITING;
+            position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_LINK;
+            PositionControl_ResetOutput();
+        }
+        return;
+    }
+
+    if (!position_flow_available)
+    {
+        if ((position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_ACTIVE) ||
+            (position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_PILOT_MOVE))
+        {
+            PositionControl_LatchOffWithReason((uint8_t)POSITION_CONTROL_FAULT_FLOW);
+        }
+        else
+        {
+            position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_WAITING;
+            position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_FLOW;
+            PositionControl_ResetOutput();
+        }
         return;
     }
 
@@ -201,6 +257,8 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
         if (position_snapshot.state != (uint8_t)POSITION_CONTROL_STATE_PILOT_MOVE)
         {
             position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_PILOT_MOVE;
+            position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_NONE;
+            position_recenter_frames = 0U;
             PositionControl_ResetOutput();
         }
         position_snapshot.position_forward_counts = rotated_position_forward - position_anchor_x;
@@ -208,6 +266,23 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
         position_snapshot.velocity_forward_cps = rotated_velocity_forward;
         position_snapshot.velocity_right_cps = rotated_velocity_right;
         position_snapshot.velocity_update_count++;
+        return;
+    }
+
+    safety_fault = PositionControl_GetSafetyFault();
+    if (safety_fault != (uint8_t)POSITION_CONTROL_FAULT_NONE)
+    {
+        if (position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_ACTIVE)
+        {
+            PositionControl_LatchOffWithReason(safety_fault);
+        }
+        else
+        {
+            position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_WAITING;
+            position_snapshot.fault_reason = safety_fault;
+            position_recenter_frames = 0U;
+            PositionControl_ResetOutput();
+        }
         return;
     }
 
@@ -231,6 +306,7 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
         position_snapshot.anchor_x_counts = position_anchor_x;
         position_snapshot.anchor_y_counts = position_anchor_y;
         position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_ACTIVE;
+        position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_NONE;
         PositionControl_ResetOutput();
     }
 
@@ -249,6 +325,7 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
         position_snapshot.anchor_x_counts = position_anchor_x;
         position_snapshot.anchor_y_counts = position_anchor_y;
         position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_ACTIVE;
+        position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_NONE;
         PositionControl_ResetOutput();
     }
 
@@ -298,9 +375,14 @@ void PositionControl_SetFlowAvailable(bool available)
 {
     position_flow_available = available;
     position_snapshot.gate_mask = PositionControl_GetGateMask();
-    if (!available && (position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_ACTIVE))
+    if (!available && ((position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_ACTIVE) ||
+                       (position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_PILOT_MOVE)))
     {
-        PositionControl_LatchOff();
+        PositionControl_LatchOffWithReason((uint8_t)POSITION_CONTROL_FAULT_FLOW);
+    }
+    else if (!available && position_request)
+    {
+        position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_FLOW;
     }
 }
 
@@ -308,7 +390,20 @@ void PositionControl_GetSnapshot(PositionControlSnapshot_t *snapshot)
 {
     if (snapshot == NULL) return;
 
-    /* 写入只发生在 flowTask，读取只发生在同级的 tofTask；两者不会同时运行。
-       不在这个纯计算模块引入 FreeRTOS 临界区，宿主机仿真也能直接编译。 */
+    /* 位置快照由 flowTask 写入，安全门禁由 250Hz 控制环发布；
+       输出读取先经过安全门禁，避免跨任务沿用旧姿态目标。 */
     *snapshot = position_snapshot;
+    /* 控制环发布安全状态的频率高于 Flow；在 Flow 下一帧锁存前，
+       读取接口也必须先把姿态目标视为无效，避免未来接入姿态环时多用一拍旧输出。 */
+    if (!position_safety_context_valid || !position_control_permission ||
+        !position_attitude_safe || !position_height_safe)
+    {
+        snapshot->valid = false;
+        snapshot->velocity_forward_sp_cps = 0.0f;
+        snapshot->velocity_right_sp_cps = 0.0f;
+        snapshot->raw_roll_deg = 0.0f;
+        snapshot->raw_pitch_deg = 0.0f;
+        snapshot->roll_deg = 0.0f;
+        snapshot->pitch_deg = 0.0f;
+    }
 }

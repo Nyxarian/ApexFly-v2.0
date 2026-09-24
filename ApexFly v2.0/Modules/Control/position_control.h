@@ -25,6 +25,16 @@ typedef enum
     POSITION_CONTROL_STATE_PILOT_MOVE = 4U
 } PositionControlState_t;
 
+typedef enum
+{
+    POSITION_CONTROL_FAULT_NONE = 0U,
+    POSITION_CONTROL_FAULT_FLOW = 1U,
+    POSITION_CONTROL_FAULT_LINK = 2U,
+    POSITION_CONTROL_FAULT_ATTITUDE = 3U,
+    POSITION_CONTROL_FAULT_HEIGHT = 4U,
+    POSITION_CONTROL_FAULT_PERMISSION = 5U
+} PositionControlFaultReason_t;
+
 #define POSITION_CONTROL_GATE_REQUEST 0x01U
 #define POSITION_CONTROL_GATE_LINK    0x02U
 #define POSITION_CONTROL_GATE_FLOW    0x04U
@@ -59,16 +69,21 @@ typedef struct
     /* 本次使能捕获的光流累计原点，模块坐标，单位计数。 */
     float anchor_x_counts;
     float anchor_y_counts;
+    /* 最近一次阻止/退出定点的原因，取 PositionControlFaultReason_t。 */
+    uint8_t fault_reason;
 } PositionControlSnapshot_t;
 
 /* 清空计数器与全部输出。光流任务启动时调用一次。 */
 void PositionControl_Init(void);
 
-/* OF7 请求接口。真实遥控请求留到 OF10 接入；当前默认请求仅用于只打印诊断。 */
+/* OF10 独立定点请求接口。上电默认关闭。 */
 void PositionControl_SetRequest(bool requested);
 
-/* OF7 外部门禁接口：链路、摇杆中心、实际控制许可。 */
-void PositionControl_SetGateContext(bool link_ok, bool sticks_centered, bool control_permission);
+/* OF8 外部门禁接口：链路与摇杆状态，由 Flow 任务更新。 */
+void PositionControl_SetPilotContext(bool link_ok, bool sticks_centered);
+
+/* OF8 安全状态：由控制环更新，不在 Flow 任务里猜测姿态/高度是否可用。 */
+void PositionControl_SetSafetyContext(bool control_permission, bool attitude_safe, bool height_safe);
 
 /*
  * 输入一帧已减零点的光流状态并更新两级环。
