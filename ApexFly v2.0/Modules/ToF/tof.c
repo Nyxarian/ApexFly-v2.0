@@ -41,6 +41,7 @@
 #include "debug.h"
 #include "flow.h"
 #include "i2c.h"
+#include "position_control.h"
 #include "radio.h"
 #include "task.h"
 /* vertical_est 不再需要：打印里的 h/vz/v 改成从 vertical_control 的快照读，
@@ -147,8 +148,6 @@ void ToF_Task(void *argument)
             phase = TOF_PHASE_WAIT;
             wait_count = 0U;
             miss_rounds = 0U;
-            Debug_Printf("[TOF] init ok: id=0x%04X range=short step=%ums\r\n",
-                         (unsigned)VL53L1X_ReadModelId(&tof_device), (unsigned)TOF_STEP_MS);
         }
 
         /* ── 状态机走一步。 ── */
@@ -266,6 +265,7 @@ void ToF_Task(void *argument)
             VerticalControlSnapshot_t vertical_control_state;
             RadioFlightStateSnapshot_t radio_state;
             FlowState_t flow_state;
+            PositionControlSnapshot_t position_control_state;
 
             next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
             /* ⚠️ 估计高度/垂速/有效标志全部从 **vertical_control 的快照**读，
@@ -280,8 +280,7 @@ void ToF_Task(void *argument)
             (void)Radio_GetFlightStateSnapshot(&radio_state);
 
             /* ── 一行打完整个垂直轴（2026-09-15 起，取代原来的例行 [TOF] + [ALT] 两行）──
-               ⚠️ 注意 `[TOF]` 这个标签**没有消失**：本文件里 `init ok` / `init fail` /
-                  `trigger fail` / `too many misses, re-init` 这些**一次性事件**仍然用它，
+               ⚠️ 注意 `[TOF]` 这个标签只用于初始化失败、触发失败和连续丢测量等故障事件，
                   那是 ToF 模块自己的故障与状态消息，与被合并掉的例行数据行不是一回事。
                ⚠️ 为什么要合并：原来两行共约 239 字符，其中 h / vz / v 三个字段是
                   **同一时刻同一来源打了两遍**（两行都读估计器，取出时刻差一拍，
@@ -341,8 +340,8 @@ void ToF_Task(void *argument)
                          (double)vertical_control_state.vz_throttle_base_us,
                          (unsigned)radio_state.throttle_pwm_us);
 
-            /* ── 光流一行（2026-09-18，OF1~OF5）─────────────────────
-               ⚠️ 本阶段光流**不接任何控制**，这一行是它唯一的出口。
+            /* ── 光流一行（2026-09-18 起）──────────────────────────
+               ⚠️ OF6 仍然**不接任何控制**；[OF] 只显示传感器原始状态。
                n     = 四重校验全过、成功解出的帧数（持续增长才说明接线/波特率对）
                bad   = 累加和失败 / 长度或包尾失败（持续增长 ⇒ 波特率或接线有问题）
                qrej  = 质量不达标被拒的帧数
@@ -355,6 +354,31 @@ void ToF_Task(void *argument)
                a     = 距最近一帧**合格**数据的毫秒数 */
             Flow_GetState(&flow_state);
             Debug_Printf("[OF] n=%lu bad=%lu/%lu qrej=%lu | q=%u dx=%d dy=%d | z=%+.4f,%+.4f | sx=%+.1f sy=%+.1f | v=%u cal=%u a=%lums\r\n", (unsigned long)flow_state.frame_count, (unsigned long)flow_state.checksum_error_count, (unsigned long)flow_state.format_error_count, (unsigned long)flow_state.quality_reject_count, (unsigned)flow_state.quality, (int)flow_state.dx, (int)flow_state.dy, (double)flow_state.zero_x, (double)flow_state.zero_y, (double)flow_state.sum_x, (double)flow_state.sum_y, flow_state.valid ? 1U : 0U, (unsigned)flow_state.cal, (unsigned long)flow_state.age_ms);
+
+            /* ── OF6 位置/速度两级环（只算不下发）────────────────────
+               n      = 速度环 / 位置环更新次数，约应为 2:1
+               ok     = 光流有效且零点标定完成；否则输出强制为 0
+               p/v/sp = 旋到机体系后的前、右位置 / 速度 / 目标速度
+               raw    = 速度环原始 roll,pitch 角；out 是 2.5Hz 低通后的角
+               ⚠️ out 仅供台架判方向，绝不写 AttitudeControl_Update。 */
+            PositionControl_GetSnapshot(&position_control_state);
+            Debug_Printf("[PC] req=%u gate=0x%02X st=%u n=%lu/%lu ok=%u | p=%+.1f,%+.1f v=%+.1f,%+.1f sp=%+.1f,%+.1f | raw=%+.2f,%+.2f out=%+.2f,%+.2f\r\n",
+                         position_control_state.request ? 1U : 0U,
+                         (unsigned)position_control_state.gate_mask,
+                         (unsigned)position_control_state.state,
+                         (unsigned long)position_control_state.velocity_update_count,
+                         (unsigned long)position_control_state.position_update_count,
+                         position_control_state.valid ? 1U : 0U,
+                         (double)position_control_state.position_forward_counts,
+                         (double)position_control_state.position_right_counts,
+                         (double)position_control_state.velocity_forward_cps,
+                         (double)position_control_state.velocity_right_cps,
+                         (double)position_control_state.velocity_forward_sp_cps,
+                         (double)position_control_state.velocity_right_sp_cps,
+                         (double)position_control_state.raw_roll_deg,
+                         (double)position_control_state.raw_pitch_deg,
+                         (double)position_control_state.roll_deg,
+                         (double)position_control_state.pitch_deg);
         }
 
         /* 每步都让出 CPU：本任务与 magtask 共用 I2C2。 */

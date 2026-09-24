@@ -104,6 +104,13 @@ void Radio_PublishFlightMode(uint8_t flight_mode)
     taskEXIT_CRITICAL();
 }
 
+void Radio_PublishPositionState(uint8_t position_state)
+{
+    taskENTER_CRITICAL();
+    radio_flight_state.position_state = (uint8_t)(position_state & 0x07U);
+    taskEXIT_CRITICAL();
+}
+
 static RA01SC_Status_t Radio_Initialize(void)
 {
     RA01SC_Status_t status;
@@ -146,7 +153,9 @@ static RA01SC_Status_t Radio_SendTelemetry(uint16_t sequence)
     telemetry.altitude_cm = flight_state.altitude_cm;
     telemetry.vertical_speed_cms = flight_state.vertical_speed_cms;
     telemetry.battery_mv = Battery_GetMillivolts();
-    telemetry.flight_mode = flight_state.flight_mode;
+    telemetry.flight_mode = (uint8_t)((flight_state.flight_mode & 0x0FU) |
+                                      ((flight_state.position_state << APEX_TELEMETRY_POSITION_STATE_SHIFT) & APEX_TELEMETRY_POSITION_STATE_MASK) |
+                                      (flight_state.flight_mode & 0x80U));
     if (flight_state.armed) telemetry.flags |= APEX_TELEMETRY_FLAG_ARMED;
     if (flight_state.imu_ready) telemetry.flags |= APEX_TELEMETRY_FLAG_IMU_READY;
     if (flight_state.motor_ready) telemetry.flags |= APEX_TELEMETRY_FLAG_MOTOR_READY;

@@ -45,6 +45,8 @@ typedef struct
        "遥控请求被拒绝或已自动退出"。注意是**实际生效**而不是遥控请求的那个：
        定高因故障自动退出时，遥控器上要立刻看到模式变回去，飞行员才有明确反馈。 */
     uint8_t flight_mode;
+    /* 实际定点状态，编码见 apex_protocol.h。 */
+    uint8_t position_state;
 } RadioFlightStateSnapshot_t;
 
 /**
@@ -78,6 +80,8 @@ void Radio_PublishFlightState(float roll_deg, float pitch_deg, float yaw_deg, ui
  * @param flight_mode 实际模式；bit7 置位表示请求被拒绝或已自动退回普通模式。
  */
 void Radio_PublishFlightMode(uint8_t flight_mode);
+/* 发布实际定点状态，遥测复用 flight_mode 的 bit4~6。 */
+void Radio_PublishPositionState(uint8_t position_state);
 
 /**
  * @brief 电台任务入口。绑定 SPI1 后连续接收，失败则间隔重试。

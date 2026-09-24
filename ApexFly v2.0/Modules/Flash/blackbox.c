@@ -75,7 +75,6 @@
 #define BLACKBOX_UART (&huart3)
 #define BLACKBOX_COMMAND_BUFFER_SIZE 40U
 #define BLACKBOX_UART_POLL_MS 5U
-#define BLACKBOX_STATUS_PRINT_MS 10000U
 #define BLACKBOX_DUMP_DEFAULT_RECORDS 20000U
 
 typedef struct
@@ -1378,9 +1377,9 @@ static bool Blackbox_Initialize(void)
         Debug_Printf("[BB] flash init fail %u.\r\n", (unsigned int)status);
         return false;
     }
-    if (Blackbox_ApplyBestSlot()) Debug_Printf("[BB] pid loaded gen=%lu.\r\n", (unsigned long)blackbox_parameter_generation);
+    if (Blackbox_ApplyBestSlot()) (void)blackbox_parameter_generation;
     else Debug_Printf("[BB] no saved pid, using defaults.\r\n");
-    if (Blackbox_ApplyBestMagCalSlot()) Debug_Printf("[MAG_CAL] flash loaded gen=%lu.\r\n", (unsigned long)blackbox_mag_cal_generation);
+    if (Blackbox_ApplyBestMagCalSlot()) (void)blackbox_mag_cal_generation;
     else Debug_Printf("[MAG_CAL] no saved offset, heading stays uncalibrated.\r\n");
     /* 先放行 SAVE，再扫日志，避免上电 SPI 长扫描拖死电机任务。 */
     blackbox_ready = true;
@@ -1388,7 +1387,6 @@ static bool Blackbox_Initialize(void)
     if (Blackbox_LoadLogIndex())
     {
         Blackbox_RecoverWritePointer();
-        Debug_Printf("[BB] log index loaded wrap=%u.\r\n", blackbox_log_wrapped ? 1U : 0U);
     }
     else if (!Blackbox_ScanLogEnd())
     {
@@ -1398,7 +1396,6 @@ static bool Blackbox_Initialize(void)
         blackbox_log_wrapped = false;
     }
     else (void)Blackbox_WriteLogIndex();
-    Debug_Printf("[BB] ready id=%02X%02X%02X next_session=%u log=0x%08lX wrap=%u.\r\n", (unsigned int)blackbox_flash.manufacturer_id, (unsigned int)blackbox_flash.memory_type, (unsigned int)blackbox_flash.capacity_id, (unsigned int)blackbox_next_session_id, (unsigned long)blackbox_log_write_address, blackbox_log_wrapped ? 1U : 0U);
     return true;
 }
 
@@ -1466,7 +1463,6 @@ void Blackbox_SubmitSample(const BlackboxSample_t *sample)
 void Blackbox_Task(void *argument)
 {
     BlackboxJob_t job;
-    uint32_t next_status_tick;
 
     (void)argument;
     PidTable_Init();
@@ -1477,7 +1473,6 @@ void Blackbox_Task(void *argument)
             vTaskDelay(pdMS_TO_TICKS(1000U));
             continue;
         }
-        next_status_tick = (uint32_t)xTaskGetTickCount() + BLACKBOX_STATUS_PRINT_MS;
         for (;;)
         {
             if (xQueueReceive(blackbox_queue, &job, pdMS_TO_TICKS(BLACKBOX_UART_POLL_MS)) == pdTRUE)
@@ -1496,11 +1491,6 @@ void Blackbox_Task(void *argument)
                 }
             }
             Blackbox_PollUart();
-            if ((int32_t)(xTaskGetTickCount() - next_status_tick) >= 0)
-            {
-                Debug_Printf("[BB] rec=%u sess=%u wr=0x%08lX wrap=%u drop=%lu.\r\n", blackbox_recording ? 1U : 0U, (unsigned int)blackbox_active_session_id, (unsigned long)blackbox_log_write_address, blackbox_log_wrapped ? 1U : 0U, (unsigned long)blackbox_dropped_samples);
-                next_status_tick = (uint32_t)xTaskGetTickCount() + BLACKBOX_STATUS_PRINT_MS;
-            }
         }
     }
 }

@@ -23,7 +23,10 @@
 
 #include "apex_config.h"
 #include "cmsis_os.h"
+#include "control_link.h"
 #include "flow_cxof.h"
+#include "position_control.h"
+#include "radio.h"
 #include "task.h"
 #include "usart.h"
 
@@ -89,11 +92,42 @@ static uint32_t flow_last_good_tick;
 static uint32_t flow_last_frame_tick;
 static uint8_t flow_quality_bad_streak;
 static bool flow_ever_got_frame;
+static bool flow_sticks_centered;
+
+#define FLOW_STICK_CENTER_ENTER 30
+#define FLOW_STICK_CENTER_EXIT 50
 
 /** @brief 取绝对值。不用 fabsf 是为了不引入 libm 依赖。 */
 static float Flow_Absf(float value)
 {
     return (value < 0.0f) ? -value : value;
+}
+
+static bool Flow_SticksCentered(const ControlLinkSnapshot_t *link)
+{
+    int16_t limit = flow_sticks_centered ? FLOW_STICK_CENTER_EXIT : FLOW_STICK_CENTER_ENTER;
+
+    if (link == NULL) return false;
+    return (link->command.roll <= limit) && (link->command.roll >= -limit) &&
+           (link->command.pitch <= limit) && (link->command.pitch >= -limit) &&
+           (link->command.yaw <= limit) && (link->command.yaw >= -limit);
+}
+
+static void Flow_UpdatePositionContext(void)
+{
+    ControlLinkSnapshot_t link;
+    bool link_ok;
+
+    ControlLink_GetSnapshot(&link);
+    link_ok = link.connected && link.command_valid;
+    /* 失联时不清掉上一次请求；PositionControl 的链路门禁负责进入故障锁存。
+       收到新的有效帧后，用户关开请求才能解除锁存。 */
+    if (link.command_valid)
+    {
+        PositionControl_SetRequest((link.command.flags & APEX_CONTROL_FLAG_POSITION_HOLD_REQUESTED) != 0U);
+    }
+    flow_sticks_centered = Flow_SticksCentered(&link);
+    PositionControl_SetGateContext(link_ok, flow_sticks_centered, true);
 }
 
 static void Flow_RingPushFromISR(const uint8_t *data, uint16_t length)
@@ -239,6 +273,10 @@ static void Flow_OnFrame(const FlowCxofFrame_t *frame)
             float dt_s = (float)dt_ms / 1000.0f;
             flow_snapshot.vx_cps = counts_x / dt_s;
             flow_snapshot.vy_cps = counts_y / dt_s;
+            /* OF6 只在每个合格、已标定的光流帧上算一次。
+               输出留在 position_control 快照里给 tofTask 打印，绝不写姿态环。 */
+            PositionControl_Update(flow_snapshot.sum_x, flow_snapshot.sum_y,
+                                   flow_snapshot.vx_cps, flow_snapshot.vy_cps, dt_s);
         }
     }
 }
@@ -305,6 +343,7 @@ void Flow_Init(void)
     flow_last_frame_tick = 0U;
     flow_quality_bad_streak = 0U;
     flow_ever_got_frame = false;
+    flow_sticks_centered = true;
 
     flow_zero_x = 0.0f;
     flow_zero_y = 0.0f;
@@ -340,6 +379,7 @@ void Flow_Init(void)
     flow_snapshot.byte_count = 0U;
     flow_snapshot.uart_error_count = 0U;
     flow_snapshot.dma_drop_count = 0U;
+    PositionControl_Init();
 }
 
 void Flow_Task(void *argument)
@@ -393,6 +433,15 @@ void Flow_Task(void *argument)
         flow_snapshot.dma_drop_count = flow_dma_drop_count;
 
         Flow_UpdateValidity();
+        Flow_UpdatePositionContext();
+        /* 连续低质量、掉线或尚未完成零点标定时，OF6 输出必须为零。
+           这一步只改“打印快照”，并未接入任何控制通道。 */
+        PositionControl_SetFlowAvailable(flow_snapshot.valid && (flow_cal_state == FLOW_CAL_DONE));
+        {
+            PositionControlSnapshot_t position_state;
+            PositionControl_GetSnapshot(&position_state);
+            Radio_PublishPositionState(position_state.state);
+        }
 
         if (!received_byte) osDelay(FLOW_POLL_MS);
         else taskYIELD();

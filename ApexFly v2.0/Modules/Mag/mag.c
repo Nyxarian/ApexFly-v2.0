@@ -149,11 +149,6 @@ static void Mag_ClearSnapshot(bool keep_chip)
  */
 static void Mag_PrintBusScan(const MagProbe_t *probe)
 {
-    uint8_t index;
-    /* 每个地址占 5 字节（" 0xNN"），末尾留 1 字节给终止符。 */
-    char addrs[(sizeof(probe->found_addrs) * 5U) + 1U];
-    uint16_t used = 0U;
-
     if (probe == NULL) return;
 
     if (probe->found_count == 0U)
@@ -161,20 +156,6 @@ static void Mag_PrintBusScan(const MagProbe_t *probe)
         Debug_Printf("[I2C2] scan: no device responded (fail=%u).\r\n", (unsigned)probe->fail_code);
         return;
     }
-
-    for (index = 0U; index < probe->found_count; index++)
-    {
-        /* 每个地址占 5 字节：" 0xNN" */
-        addrs[used] = ' ';
-        addrs[used + 1U] = '0';
-        addrs[used + 2U] = 'x';
-        addrs[used + 3U] = "0123456789ABCDEF"[(probe->found_addrs[index] >> 4) & 0x0FU];
-        addrs[used + 4U] = "0123456789ABCDEF"[probe->found_addrs[index] & 0x0FU];
-        used = (uint16_t)(used + 5U);
-    }
-    addrs[used] = '\0';
-
-    Debug_Printf("[I2C2] scan: found %u device(s):%s\r\n", (unsigned)probe->found_count, addrs);
 }
 
 void Mag_Task(void *argument)

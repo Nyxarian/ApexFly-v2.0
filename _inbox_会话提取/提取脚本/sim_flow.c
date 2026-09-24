@@ -1,17 +1,19 @@
 /* 光流（OF1~OF5）的宿主机仿真：把验收判据在**烧录之前**先跑一遍。
  *
- * 真实参与编译的只有 flow.c 与 flow_cxof.c，外设与 RTOS 用桩顶掉
+ * 真实参与编译的是 flow.c、flow_cxof.c 与 position_control.c，外设与 RTOS 用桩顶掉
  * （flow_stub/ 下的 main.h、cmsis_os.h、task.h）。
  *
  * 编译（宿主机 gcc；本文件不碰任何硬件）：
- *   gcc -std=c99 -Wall -Wextra -Wno-unused-parameter \
+ *   gcc -std=c99 -Wall -Wextra -Wno-unused-parameter -DSTM32G474xx -DUSE_HAL_DRIVER \
  *     -I flow_stub -I "../../ApexFly v2.0/Core/Inc" \
  *     -I "../../ApexFly v2.0/Drivers/STM32G4xx_HAL_Driver/Inc" \
  *     -I "../../ApexFly v2.0/Drivers/CMSIS/Device/ST/STM32G4xx/Include" \
  *     -I "../../ApexFly v2.0/Drivers/CMSIS/Include" \
  *     -I "../../ApexFly v2.0/Modules/Flow" \
+ *     -I "../../ApexFly v2.0/Modules/Control" \
  *     sim_flow.c "../../ApexFly v2.0/Modules/Flow/flow.c" \
- *                "../../ApexFly v2.0/Modules/Flow/flow_cxof.c" -o sim_flow.exe
+ *                "../../ApexFly v2.0/Modules/Flow/flow_cxof.c" \
+ *                "../../ApexFly v2.0/Modules/Control/position_control.c" -o sim_flow.exe
  *
  * ── ⭐ 怎么在不改产品代码的前提下驱动真的 Flow_Task ────────────────
  * Flow_Task 里是一个 `for(;;)`，而且**一进来就调 Flow_Init()**。
@@ -32,6 +34,8 @@
  *    真实 Quality 水平、厂区地面纹理够不够、真实零偏有多大。 */
 
 #include "flow.h"
+#include "position_control.h"
+#include "control_link.h"
 #include "apex_config.h"
 
 #include "stm32g4xx_hal.h"
@@ -88,10 +92,23 @@ HAL_UART_RxEventTypeTypeDef HAL_UARTEx_GetRxEventType(const UART_HandleTypeDef *
 
 /* 模拟时钟。 */
 static uint32_t sim_ms;
+static ControlLinkSnapshot_t sim_control_link = {
+    true, true, {0, 0, 0, APEX_CONTROL_FLAG_POSITION_HOLD_REQUESTED}
+};
 
 uint32_t osKernelGetTickCount(void)
 {
     return sim_ms;
+}
+
+void ControlLink_GetSnapshot(ControlLinkSnapshot_t *snapshot)
+{
+    if (snapshot != NULL) *snapshot = sim_control_link;
+}
+
+void Radio_PublishPositionState(uint8_t position_state)
+{
+    (void)position_state;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -302,6 +319,9 @@ static void Feed_Accum(int step)
 static void Check_Accum(void)
 {
     FlowState_t s = snap();
+    PositionControlSnapshot_t pc;
+
+    PositionControl_GetSnapshot(&pc);
 
     check("5a ⭐ 累积流量 = 10 × 5 = 50（减零点后精确）", s.sum_x == 50.0f, NULL);
     check("5a Y 轴未动", s.sum_y == 0.0f, NULL);
@@ -311,6 +331,8 @@ static void Check_Accum(void)
     check("5a ⭐⭐ 失效时不继续累积（sum 仍是 50，不是 70）", s.sum_x == 50.0f, NULL);
     check("5a 打印用的 quality 是**当前**值（5），便于一眼看出地面看不清",
           s.quality == 5U, NULL);
+    check("5a OF6：光流失效时输出归零，不把冻结数据当静止",
+          !pc.valid && (pc.roll_deg == 0.0f) && (pc.pitch_deg == 0.0f), NULL);
 }
 
 /* ── 5b 长时间无合格帧 ⇒ 超时失效；恢复后继续累积 ── */
@@ -323,13 +345,24 @@ static void Feed_Timeout(int step)
         check("5b ⭐ 超时期间数据仍冻结", s.sum_x == 50.0f, NULL);
     }
     if (step == 8) send_frame(5, 0, 80);        /* 恢复：合格帧回来 */
+    if (step == 8)
+    {
+        /* OF7 规定失效后必须重新关开请求，避免传感器恢复时自动接管。 */
+        PositionControl_SetRequest(false);
+        PositionControl_SetRequest(true);
+    }
+    if (step == 9) send_frame(0, 0, 80);        /* 请求重新打开后的第一帧，捕获新原点 */
 }
 static void Check_Timeout(void)
 {
     FlowState_t s = snap();
+    PositionControlSnapshot_t pc;
+
+    PositionControl_GetSnapshot(&pc);
 
     check("5b ⭐ 合格帧回来后自动恢复（valid = 1）", s.valid, NULL);
     check("5b ⭐ 恢复后累积接着走（50 + 5 = 55，没有被清零）", s.sum_x == 55.0f, NULL);
+    check("5b OF6：合格帧恢复后重新计算", pc.valid && (pc.velocity_update_count > 0U), NULL);
 }
 
 /* ── 6 零点标定的守卫与自动重试 ── */
