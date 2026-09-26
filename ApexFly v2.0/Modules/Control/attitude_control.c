@@ -285,7 +285,7 @@ void AttitudeControl_Reset(void)
 /**
  * @brief 三轴外环加内环，按已测符号送进混控。
  */
-bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, float mag_heading_deg, bool mag_heading_valid, int16_t yaw_stick, int16_t roll_stick, int16_t pitch_stick, float roll_trim_deg, float pitch_trim_deg, float dt_s, MixerOutput_t *output)
+bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, float mag_heading_deg, bool mag_heading_valid, int16_t yaw_stick, int16_t roll_stick, int16_t pitch_stick, float roll_trim_deg, float pitch_trim_deg, float position_roll_offset_deg, float position_pitch_offset_deg, float dt_s, MixerOutput_t *output)
 {
     MixerInput_t mixer_input;
     float roll_setpoint_raw_deg;
@@ -304,10 +304,10 @@ bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, f
 
     /* 杆量映射成目标角后再加 Trim；Trim 只偏置中位，不把满杆角再放大。
        映射结果先过斜率限制（#29），杆量/Trim 跳变不会让目标角一步到位。 */
-    roll_setpoint_raw_deg = AttitudeControl_StickToAngleDeg(roll_stick) + roll_trim_deg;
+    roll_setpoint_raw_deg = AttitudeControl_StickToAngleDeg(roll_stick) + roll_trim_deg + position_roll_offset_deg;
     /* 俯仰摇杆按 ATTITUDE_PITCH_STICK_SIGN 取向后，再加 Trim。
        Trim 加在取反之后，免得它的符号跟着一起翻。 */
-    pitch_setpoint_raw_deg = (ATTITUDE_PITCH_STICK_SIGN * AttitudeControl_StickToAngleDeg(pitch_stick)) + pitch_trim_deg;
+    pitch_setpoint_raw_deg = (ATTITUDE_PITCH_STICK_SIGN * AttitudeControl_StickToAngleDeg(pitch_stick)) + pitch_trim_deg + position_pitch_offset_deg;
     roll_setpoint_limited_deg = AttitudeControl_SlewLimit(roll_setpoint_limited_deg, roll_setpoint_raw_deg, ATTITUDE_TARGET_SLEW_DPS * dt_s);
     pitch_setpoint_limited_deg = AttitudeControl_SlewLimit(pitch_setpoint_limited_deg, pitch_setpoint_raw_deg, ATTITUDE_TARGET_SLEW_DPS * dt_s);
     mixer_input.throttle_us = throttle_us;

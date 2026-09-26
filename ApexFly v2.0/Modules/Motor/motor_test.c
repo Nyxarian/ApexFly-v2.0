@@ -281,6 +281,7 @@ void MotorTest_Task(void *argument)
     static MixerOutput_t mixer_output;
     static ControlLinkSnapshot_t link;
     static BlackboxSample_t sample;
+    static PositionControlSnapshot_t position_control_state;
     static VerticalControlSnapshot_t vertical_control_state;
     MPU6050_Status_t status;
     bool bias_ready;
@@ -308,6 +309,8 @@ void MotorTest_Task(void *argument)
     bool mag_calibration_valid;
     float roll_trim_deg;
     float pitch_trim_deg;
+    float position_roll_offset_deg;
+    float position_pitch_offset_deg;
 
     (void)argument;
     MotorTest_TimebaseInit();
@@ -499,6 +502,7 @@ void MotorTest_Task(void *argument)
             PositionControl_SetSafetyContext(position_control_permission,
                                              position_attitude_safe,
                                              position_height_safe);
+            PositionControl_GetSnapshot(&position_control_state);
 
             if (!armed)
             {
@@ -536,6 +540,15 @@ void MotorTest_Task(void *argument)
                    每拍丢弃小数会系统性吃掉速率（实测 800->750、300->250）。 */
                 mag_heading_cdeg = MotorTest_MagHeadingCdeg(&mag_calibration_valid);
                 PidTable_GetAttitudeTrimDeg(&roll_trim_deg, &pitch_trim_deg);
+                position_roll_offset_deg = 0.0f;
+                position_pitch_offset_deg = 0.0f;
+                if ((vertical_control_state.mode == (uint8_t)VERTICAL_MODE_MANUAL) &&
+                    (position_control_state.state == (uint8_t)POSITION_CONTROL_STATE_ACTIVE) &&
+                    position_control_state.valid)
+                {
+                    position_roll_offset_deg = position_control_state.roll_deg;
+                    position_pitch_offset_deg = position_control_state.pitch_deg;
+                }
                 if (vertical_control_state.mode == (uint8_t)VERTICAL_MODE_ALT_HOLD)
                 {
                     throttle_target_us = VerticalControl_GetThrottleUs();
@@ -567,7 +580,7 @@ void MotorTest_Task(void *argument)
                     mixer_output.motor_4_us = throttle_us;
                     Motor_SetAllPulseUs(throttle_us);
                 }
-                else if (AttitudeControl_Update((float)throttle_us, &body, (mag_heading_cdeg < 0) ? 0.0f : ((float)mag_heading_cdeg / 100.0f), mag_calibration_valid && (mag_heading_cdeg >= 0), link.command.yaw, link.command.roll, link.command.pitch, roll_trim_deg, pitch_trim_deg, control_dt_s, &mixer_output))
+                else if (AttitudeControl_Update((float)throttle_us, &body, (mag_heading_cdeg < 0) ? 0.0f : ((float)mag_heading_cdeg / 100.0f), mag_calibration_valid && (mag_heading_cdeg >= 0), link.command.yaw, link.command.roll, link.command.pitch, roll_trim_deg, pitch_trim_deg, position_roll_offset_deg, position_pitch_offset_deg, control_dt_s, &mixer_output))
                 {
                     MotorTest_ApplyMixer(&mixer_output);
                     AttitudeControl_GetLastCorrections(&roll_corr_us, &pitch_corr_us, &yaw_corr_us);

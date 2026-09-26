@@ -115,11 +115,13 @@ void AttitudeControl_Reset(void);
  * @param pitch_stick 遥控俯仰杆，-1000～1000，前负后正，满杆对应约 ±10°。
  * @param roll_trim_deg 横滚 Trim，加在目标角上，单位度。
  * @param pitch_trim_deg 俯仰 Trim，加在目标角上，单位度。
+ * @param position_roll_offset_deg 定点横滚修正角，单位度；无效时传 0。
+ * @param position_pitch_offset_deg 定点俯仰修正角，单位度；无效时传 0。
  * @param dt_s 与上一拍间隔，单位秒，100Hz 时应接近 0.01。
  * @param output 混控输出的四路脉宽。
  * @return 混控计算成功返回 true。
  */
-bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, float mag_heading_deg, bool mag_heading_valid, int16_t yaw_stick, int16_t roll_stick, int16_t pitch_stick, float roll_trim_deg, float pitch_trim_deg, float dt_s, MixerOutput_t *output);
+bool AttitudeControl_Update(float throttle_us, const IMU_BodyAttitude_t *body, float mag_heading_deg, bool mag_heading_valid, int16_t yaw_stick, int16_t roll_stick, int16_t pitch_stick, float roll_trim_deg, float pitch_trim_deg, float position_roll_offset_deg, float position_pitch_offset_deg, float dt_s, MixerOutput_t *output);
 
 /**
  * @brief 最近一次 Update 送进混控的三轴修正，单位微秒。给黑匣子记一拍用。
