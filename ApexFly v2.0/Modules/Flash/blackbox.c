@@ -8,11 +8,11 @@
  * 0x002000 磁力计硬铁校准，扇区内 A/B 各 64 字节
  * 0x003000 日志写指针索引，4KB
  * 0x004000 日志起点
- * 最后 4KB 自检扇区，不拿来记飞
+ * 最后 4KB 给 IMU 加速度计校准双槽使用，不拿来记飞
  *
  * 日志记录固定 64 字节。写满后回到 0x004000 覆盖最老的数据，写指针保存在 0x003000。
  * dump [N] 从当前写指针往回取最近 N 条，不是从芯片物理末尾取。
- * 场次头里的 PID 用 q100（百分之一）钉死当时那套参，方便导出后对上波形。
+ * 场次头里的 PID 用 q100（百分之一）钉死当时那套参；每次成功 SET/LOAD 另写完整 39 项参数版本，方便逐次整定对波形。
  * 解锁 UTC 写在高度参数记录的保留区，上锁 UTC 写在场次尾；样本仍是本场相对毫秒。
  * USART3 轮询收 dump / dumpall / help；SAVE / 日志写入只在本任务做。
  */
@@ -22,6 +22,7 @@
 #include "apex_protocol.h"
 #include "debug.h"
 #include "gps.h"
+#include "imu_accel_calibration.h"
 #include "main.h"
 #include "mag.h"
 #include "pid_table.h"
@@ -46,8 +47,13 @@
 #define BLACKBOX_MAG_CAL_SCHEMA 3U
 #define BLACKBOX_LOG_INDEX_ADDRESS 0x003000UL
 #define BLACKBOX_LOG_START_ADDRESS 0x004000UL
-#define BLACKBOX_TEST_SECTOR_ADDRESS (W25Q64_TOTAL_SIZE_BYTES - W25Q64_SECTOR_SIZE_BYTES)
-#define BLACKBOX_LOG_END_ADDRESS BLACKBOX_TEST_SECTOR_ADDRESS
+#define BLACKBOX_IMU_CAL_SECTOR (W25Q64_TOTAL_SIZE_BYTES - W25Q64_SECTOR_SIZE_BYTES)
+#define BLACKBOX_IMU_CAL_SLOT_A_OFFSET 0U
+#define BLACKBOX_IMU_CAL_SLOT_B_OFFSET 64U
+#define BLACKBOX_IMU_CAL_RECORD_SIZE 64U
+#define BLACKBOX_IMU_CAL_MAGIC 0x494D5534UL /* "IMU4" */
+#define BLACKBOX_IMU_CAL_SCHEMA 1U
+#define BLACKBOX_LOG_END_ADDRESS BLACKBOX_IMU_CAL_SECTOR
 #define BLACKBOX_LOG_INDEX_MAGIC 0x424C5849UL /* "BLXI" */
 #define BLACKBOX_LOG_INDEX_RECORD_SIZE 32U
 
@@ -57,7 +63,8 @@
    不抬版本的话**旧记录会被判成无效**（LOAD_SAVED 直接失败）。
    抬版本 + 在 Blackbox_ReadSlot 里加一条 30 项的迁移分支，
    旧记录会被读出并按当前默认值补齐新增的三项。 */
-#define BLACKBOX_PARAMETER_SCHEMA 3U
+#define BLACKBOX_PARAMETER_SCHEMA 4U
+#define BLACKBOX_PARAMETER_V8_LEGACY_COUNT 33U
 /* 旧格式（26 项，v6）与上一版（30 项，v7）。数值不能改，它们是历史存档的标记。 */
 #define BLACKBOX_PARAMETER_LEGACY_SCHEMA 1U
 #define BLACKBOX_PARAMETER_V7_SCHEMA 2U
@@ -69,10 +76,14 @@
 #define BLACKBOX_RECORD_TYPE_SESSION_END 3U
 #define BLACKBOX_RECORD_TYPE_ALTITUDE_PARAMS 4U
 #define BLACKBOX_RECORD_TYPE_POSITION_SAMPLE 5U
+#define BLACKBOX_RECORD_TYPE_POSITION_PARAMS 6U
+#define BLACKBOX_RECORD_TYPE_PID_REVISION 7U
+#define BLACKBOX_RECORD_TYPE_PID_SAVE 8U
 #define BLACKBOX_RECORD_SIZE 64U
 #define BLACKBOX_RECORD_CRC_OFFSET 60U
 #define BLACKBOX_SAMPLE_QUEUE_LENGTH 32U
 #define BLACKBOX_POSITION_SAMPLE_PERIOD_MS 80U
+#define BLACKBOX_PID_REVISION_FRAGMENT_COUNT 4U
 
 #define BLACKBOX_UART (&huart3)
 #define BLACKBOX_COMMAND_BUFFER_SIZE 40U
@@ -117,12 +128,23 @@ typedef struct
 typedef struct
 {
     uint32_t magic;
+    uint16_t schema;
+    uint16_t parameter_count;
+    uint32_t generation;
+    int32_t values_q10000[BLACKBOX_PARAMETER_V8_LEGACY_COUNT];
+    uint16_t crc16;
+    uint16_t reserved;
+} BlackboxLegacyV8ParameterRecord_t;
+
+typedef struct
+{
+    uint32_t magic;
     uint32_t write_address;
     uint16_t next_session_id;
     uint16_t wrapped;
     uint32_t generation;
     uint16_t crc16;
-    uint16_t reserved;
+    uint16_t next_revision_id;
 } BlackboxLogIndexRecord_t;
 
 #pragma pack(push, 1)
@@ -159,6 +181,54 @@ typedef struct
     uint16_t crc16;
     uint16_t reserved1;
 } BlackboxAltitudeParamsRecord_t;
+
+typedef struct
+{
+    uint32_t magic;
+    uint8_t type;
+    uint8_t schema;
+    uint16_t session_id;
+    int32_t position_q10000[6];
+    uint8_t reserved0[28];
+    uint16_t crc16;
+    uint16_t reserved1;
+} BlackboxPositionParamsRecord_t;
+
+/* 一次参数修改的完整快照分成 4 条连续记录，导出时按 revision_id 合并查看。
+   39 项 × 4 字节无法放进单条 64 字节日志记录；每条最多携带 10 项。 */
+typedef struct
+{
+    uint32_t magic;
+    uint8_t type;
+    uint8_t schema;
+    uint16_t revision_id;
+    uint32_t t_ms;
+    uint16_t session_id;
+    uint8_t fragment_index;
+    uint8_t fragment_count;
+    uint8_t parameter_start;
+    uint8_t parameter_count;
+    uint8_t operation;
+    uint8_t changed_parameter_id;
+    int32_t values_q10000[10];
+    uint16_t crc16;
+    uint16_t reserved;
+} BlackboxPidRevisionRecord_t;
+
+typedef struct
+{
+    uint32_t magic;
+    uint8_t type;
+    uint8_t schema;
+    uint16_t revision_id;
+    uint32_t t_ms;
+    uint32_t generation;
+    uint16_t session_id;
+    uint8_t operation;
+    uint8_t reserved0[41];
+    uint16_t crc16;
+    uint16_t reserved1;
+} BlackboxPidSaveRecord_t;
 
 typedef struct
 {
@@ -243,6 +313,9 @@ typedef union
     uint8_t bytes[BLACKBOX_RECORD_SIZE];
     BlackboxSessionBeginRecord_t begin;
     BlackboxAltitudeParamsRecord_t altitude;
+    BlackboxPositionParamsRecord_t position_params;
+    BlackboxPidRevisionRecord_t pid_revision;
+    BlackboxPidSaveRecord_t pid_save;
     BlackboxSampleRecord_t sample;
     BlackboxPositionRecord_t position;
     BlackboxSessionEndRecord_t end;
@@ -282,6 +355,28 @@ typedef struct
     MagCalibrationStatus_t status;
 } BlackboxMagCalCandidate_t;
 
+#pragma pack(push, 1)
+typedef struct
+{
+    uint32_t magic;
+    uint16_t schema;
+    uint16_t reserved0;
+    uint32_t generation;
+    int32_t bias_q1000000[3];
+    int32_t scale_q1000000[3];
+    uint8_t reserved1[24];
+    uint16_t crc16;
+    uint16_t reserved2;
+} BlackboxImuCalRecord_t;
+#pragma pack(pop)
+
+typedef struct
+{
+    bool valid;
+    uint32_t generation;
+    IMU_AccelCalibration_t calibration;
+} BlackboxImuCalCandidate_t;
+
 typedef enum
 {
     BLACKBOX_JOB_NONE = 0,
@@ -289,8 +384,10 @@ typedef enum
     BLACKBOX_JOB_POSITION_SAMPLE,
     BLACKBOX_JOB_SAVE,
     BLACKBOX_JOB_SAVE_MAG_CAL,
+    BLACKBOX_JOB_SAVE_IMU_CAL,
     BLACKBOX_JOB_ARM,
-    BLACKBOX_JOB_DISARM
+    BLACKBOX_JOB_DISARM,
+    BLACKBOX_JOB_PID_REVISION
 } BlackboxJobType_t;
 
 typedef struct
@@ -298,6 +395,10 @@ typedef struct
     BlackboxJobType_t type;
     BlackboxSample_t sample;
     BlackboxPositionSample_t position;
+    uint8_t pid_operation;
+    uint8_t pid_changed_parameter_id;
+    uint16_t pid_revision_id;
+    int32_t pid_values_q10000[APEX_PID_PARAMETER_COUNT];
 } BlackboxJob_t;
 
 static W25Q64_Device_t blackbox_flash;
@@ -308,10 +409,13 @@ static volatile bool blackbox_ready;
 static volatile bool blackbox_recording;
 static volatile bool blackbox_save_pending;
 static volatile bool blackbox_mag_cal_save_pending;
+static volatile bool blackbox_imu_cal_save_pending;
 static volatile bool blackbox_has_saved;
 static bool blackbox_has_saved_mag_cal;
 static uint32_t blackbox_mag_cal_generation;
+static uint32_t blackbox_imu_cal_generation;
 static MagCalibrationStatus_t blackbox_saved_mag_cal;
+static IMU_AccelCalibration_t blackbox_saved_imu_cal;
 static volatile uint32_t blackbox_dropped_samples;
 static uint32_t blackbox_log_write_address;
 static uint32_t blackbox_parameter_generation;
@@ -319,6 +423,8 @@ static uint32_t blackbox_log_index_generation;
 static bool blackbox_log_wrapped;
 static uint16_t blackbox_next_session_id;
 static uint16_t blackbox_active_session_id;
+static uint16_t blackbox_next_revision_id;
+static uint16_t blackbox_current_revision_id;
 static uint32_t blackbox_session_start_tick;
 static uint16_t blackbox_session_sample_count;
 static uint32_t blackbox_session_begin_utc_seconds;
@@ -329,12 +435,16 @@ static uint8_t blackbox_command_length;
 typedef char BlackboxParameterRecordMustFit[(sizeof(BlackboxParameterRecord_t) <= W25Q64_SECTOR_SIZE_BYTES) ? 1 : -1];
 typedef char BlackboxSessionBeginMustBe64[(sizeof(BlackboxSessionBeginRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxAltitudeParamsMustBe64[(sizeof(BlackboxAltitudeParamsRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
+typedef char BlackboxPositionParamsMustBe64[(sizeof(BlackboxPositionParamsRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
+typedef char BlackboxPidRevisionMustBe64[(sizeof(BlackboxPidRevisionRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
+typedef char BlackboxPidSaveMustBe64[(sizeof(BlackboxPidSaveRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxSampleMustBe64[(sizeof(BlackboxSampleRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxPositionMustBe64[(sizeof(BlackboxPositionRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxSessionEndMustBe64[(sizeof(BlackboxSessionEndRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxFlashRecordMustBe64[(sizeof(BlackboxFlashRecord_t) == BLACKBOX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxLogIndexMustFit[(sizeof(BlackboxLogIndexRecord_t) <= BLACKBOX_LOG_INDEX_RECORD_SIZE) ? 1 : -1];
 typedef char BlackboxMagCalMustBe64[(sizeof(BlackboxMagCalRecord_t) == BLACKBOX_MAG_CAL_RECORD_SIZE) ? 1 : -1];
+typedef char BlackboxImuCalMustBe64[(sizeof(BlackboxImuCalRecord_t) == BLACKBOX_IMU_CAL_RECORD_SIZE) ? 1 : -1];
 
 static volatile bool blackbox_abort_dump;
 static bool blackbox_dumping;
@@ -443,6 +553,26 @@ static bool Blackbox_QueuePositionJob(const BlackboxPositionSample_t *sample)
     return true;
 }
 
+static bool Blackbox_QueuePidRevisionJob(uint8_t operation, uint8_t parameter_id, const int32_t *values_q10000)
+{
+    BlackboxJob_t job;
+    uint16_t revision_id;
+
+    if ((blackbox_queue == NULL) || (values_q10000 == NULL)) return false;
+    revision_id = blackbox_next_revision_id;
+    if (revision_id == 0U) revision_id = 1U;
+    memset(&job, 0, sizeof(job));
+    job.type = BLACKBOX_JOB_PID_REVISION;
+    job.pid_operation = operation;
+    job.pid_changed_parameter_id = parameter_id;
+    job.pid_revision_id = revision_id;
+    memcpy(job.pid_values_q10000, values_q10000, sizeof(job.pid_values_q10000));
+    if (xQueueSend(blackbox_queue, &job, 0) != pdTRUE) return false;
+    blackbox_current_revision_id = revision_id;
+    blackbox_next_revision_id = (revision_id == 0xFFFFU) ? 1U : (uint16_t)(revision_id + 1U);
+    return true;
+}
+
 static bool Blackbox_SaveSlot(uint32_t address, uint32_t generation, const int32_t *values_q10000)
 {
     BlackboxParameterRecord_t record;
@@ -461,6 +591,7 @@ static bool Blackbox_SaveSlot(uint32_t address, uint32_t generation, const int32
 static bool Blackbox_ReadSlot(uint32_t address, BlackboxParameterCandidate_t *candidate)
 {
     BlackboxParameterRecord_t record;
+    BlackboxLegacyV8ParameterRecord_t legacy_v8;
     BlackboxLegacyV7ParameterRecord_t legacy_v7;
     BlackboxLegacyParameterRecord_t legacy;
     uint16_t crc;
@@ -476,6 +607,17 @@ static bool Blackbox_ReadSlot(uint32_t address, BlackboxParameterCandidate_t *ca
         if (crc != record.crc16) return false;
         candidate->generation = record.generation;
         memcpy(candidate->values_q10000, record.values_q10000, sizeof(candidate->values_q10000));
+    }
+    else if ((record.schema == 3U) && (record.parameter_count == BLACKBOX_PARAMETER_V8_LEGACY_COUNT))
+    {
+        /* OF9 之前的 33 项记录：先灌入当前 39 项默认值，再覆盖旧参数，
+           新增的定点六项保持当前固件默认值。CRC 按旧记录长度计算。 */
+        memcpy(&legacy_v8, &record, sizeof(legacy_v8));
+        crc = ApexProtocol_Crc16((const uint8_t *)&legacy_v8, (uint16_t)(sizeof(legacy_v8) - 4U));
+        if (crc != legacy_v8.crc16) return false;
+        PidTable_ExportSnapshot(candidate->values_q10000);
+        memcpy(candidate->values_q10000, legacy_v8.values_q10000, sizeof(legacy_v8.values_q10000));
+        candidate->generation = legacy_v8.generation;
     }
     else if ((record.schema == BLACKBOX_PARAMETER_V7_SCHEMA) && (record.parameter_count == APEX_PID_V7_PARAMETER_COUNT))
     {
@@ -514,6 +656,17 @@ static int32_t Blackbox_FloatToQ10000(float value)
 static float Blackbox_Q10000ToFloat(int32_t value_q10000)
 {
     return (float)value_q10000 / (float)APEX_PID_VALUE_SCALE;
+}
+
+static int32_t Blackbox_FloatToQ1000000(float value)
+{
+    if (value >= 0.0f) return (int32_t)(value * 1000000.0f + 0.5f);
+    return (int32_t)(value * 1000000.0f - 0.5f);
+}
+
+static float Blackbox_Q1000000ToFloat(int32_t value)
+{
+    return (float)value / 1000000.0f;
 }
 
 static bool Blackbox_WriteMagCalSlot(uint32_t offset, uint32_t generation, const MagCalibrationStatus_t *status)
@@ -595,6 +748,115 @@ static bool Blackbox_SaveMagCalibration(const MagCalibrationStatus_t *status)
         blackbox_has_saved_mag_cal = true;
     }
     return ok;
+}
+
+static bool Blackbox_WriteImuCalSlot(uint32_t offset, uint32_t generation, const IMU_AccelCalibration_t *calibration)
+{
+    BlackboxImuCalRecord_t record;
+
+    memset(&record, 0, sizeof(record));
+    record.magic = BLACKBOX_IMU_CAL_MAGIC;
+    record.schema = BLACKBOX_IMU_CAL_SCHEMA;
+    record.generation = generation;
+    record.bias_q1000000[0] = Blackbox_FloatToQ1000000(calibration->bias_x_g);
+    record.bias_q1000000[1] = Blackbox_FloatToQ1000000(calibration->bias_y_g);
+    record.bias_q1000000[2] = Blackbox_FloatToQ1000000(calibration->bias_z_g);
+    record.scale_q1000000[0] = Blackbox_FloatToQ1000000(calibration->scale_x);
+    record.scale_q1000000[1] = Blackbox_FloatToQ1000000(calibration->scale_y);
+    record.scale_q1000000[2] = Blackbox_FloatToQ1000000(calibration->scale_z);
+    record.crc16 = ApexProtocol_Crc16((const uint8_t *)&record, (uint16_t)(sizeof(record) - 4U));
+    return W25Q64_Write(&blackbox_flash, BLACKBOX_IMU_CAL_SECTOR + offset, (const uint8_t *)&record, sizeof(record)) == W25Q64_STATUS_OK;
+}
+
+static bool Blackbox_ReadImuCalSlot(uint32_t offset, BlackboxImuCalCandidate_t *candidate)
+{
+    BlackboxImuCalRecord_t record;
+    uint16_t crc;
+
+    memset(candidate, 0, sizeof(*candidate));
+    if (W25Q64_Read(&blackbox_flash, BLACKBOX_IMU_CAL_SECTOR + offset, (uint8_t *)&record, sizeof(record)) != W25Q64_STATUS_OK) return false;
+    if ((record.magic != BLACKBOX_IMU_CAL_MAGIC) || (record.schema != BLACKBOX_IMU_CAL_SCHEMA)) return false;
+    crc = ApexProtocol_Crc16((const uint8_t *)&record, (uint16_t)(sizeof(record) - 4U));
+    if (crc != record.crc16) return false;
+    candidate->generation = record.generation;
+    candidate->calibration.bias_x_g = Blackbox_Q1000000ToFloat(record.bias_q1000000[0]);
+    candidate->calibration.bias_y_g = Blackbox_Q1000000ToFloat(record.bias_q1000000[1]);
+    candidate->calibration.bias_z_g = Blackbox_Q1000000ToFloat(record.bias_q1000000[2]);
+    candidate->calibration.scale_x = Blackbox_Q1000000ToFloat(record.scale_q1000000[0]);
+    candidate->calibration.scale_y = Blackbox_Q1000000ToFloat(record.scale_q1000000[1]);
+    candidate->calibration.scale_z = Blackbox_Q1000000ToFloat(record.scale_q1000000[2]);
+    candidate->calibration.version = 1U;
+    candidate->calibration.valid = true;
+    candidate->valid = true;
+    return true;
+}
+
+static bool Blackbox_ApplyBestImuCalSlot(void)
+{
+    BlackboxImuCalCandidate_t slot_a;
+    BlackboxImuCalCandidate_t slot_b;
+    const BlackboxImuCalCandidate_t *best = NULL;
+
+    (void)Blackbox_ReadImuCalSlot(BLACKBOX_IMU_CAL_SLOT_A_OFFSET, &slot_a);
+    (void)Blackbox_ReadImuCalSlot(BLACKBOX_IMU_CAL_SLOT_B_OFFSET, &slot_b);
+    if (slot_a.valid && slot_b.valid) best = (slot_a.generation >= slot_b.generation) ? &slot_a : &slot_b;
+    else if (slot_a.valid) best = &slot_a;
+    else if (slot_b.valid) best = &slot_b;
+    if (best == NULL) return false;
+    blackbox_saved_imu_cal = best->calibration;
+    blackbox_imu_cal_generation = best->generation;
+    IMU_AccelCalibration_SetActive(&best->calibration);
+    return true;
+}
+
+static bool Blackbox_SaveImuCalibration(const IMU_AccelCalibration_t *calibration)
+{
+    uint32_t generation;
+    bool ok;
+
+    if ((calibration == NULL) || !calibration->valid) return false;
+    generation = blackbox_imu_cal_generation + 1U;
+    if (W25Q64_EraseSector(&blackbox_flash, BLACKBOX_IMU_CAL_SECTOR) != W25Q64_STATUS_OK) return false;
+    ok = Blackbox_WriteImuCalSlot(BLACKBOX_IMU_CAL_SLOT_A_OFFSET, generation, calibration);
+    ok = Blackbox_WriteImuCalSlot(BLACKBOX_IMU_CAL_SLOT_B_OFFSET, generation, calibration) && ok;
+    if (ok)
+    {
+        blackbox_imu_cal_generation = generation;
+        blackbox_saved_imu_cal = *calibration;
+        IMU_AccelCalibration_SetActive(calibration);
+    }
+    return ok;
+}
+
+static void Blackbox_HandleImuCalSave(void)
+{
+    IMU_AccelCalibration_t calibration;
+
+    if (!IMU_AccelCalibration_GetCompletedResult(&calibration))
+    {
+        Debug_Printf("[IMU_CAL] flash skip, calibration is not complete.\r\n");
+        blackbox_imu_cal_save_pending = false;
+        return;
+    }
+    if (Blackbox_SaveImuCalibration(&calibration))
+    {
+        Debug_Printf("[IMU_CAL] flash saved gen=%lu bias=%+.5f,%+.5f,%+.5f scale=%.5f,%.5f,%.5f.\r\n", (unsigned long)blackbox_imu_cal_generation, (double)calibration.bias_x_g, (double)calibration.bias_y_g, (double)calibration.bias_z_g, (double)calibration.scale_x, (double)calibration.scale_y, (double)calibration.scale_z);
+        IMU_AccelCalibration_RequestCancel();
+    }
+    else Debug_Printf("[IMU_CAL] flash save failed.\r\n");
+    blackbox_imu_cal_save_pending = false;
+}
+
+static bool Blackbox_QueueImuCalSave(void)
+{
+    if (!blackbox_ready || blackbox_recording || blackbox_imu_cal_save_pending) return false;
+    blackbox_imu_cal_save_pending = true;
+    if (!Blackbox_QueueJob(BLACKBOX_JOB_SAVE_IMU_CAL, NULL))
+    {
+        blackbox_imu_cal_save_pending = false;
+        return false;
+    }
+    return true;
 }
 
 static void Blackbox_HandleMagCalSave(void)
@@ -699,6 +961,7 @@ static bool Blackbox_WriteLogIndex(void)
     record.next_session_id = blackbox_next_session_id;
     record.wrapped = blackbox_log_wrapped ? 1U : 0U;
     record.generation = blackbox_log_index_generation + 1U;
+    record.next_revision_id = blackbox_next_revision_id;
     memcpy(bytes, &record, sizeof(record));
     {
         uint16_t crc = ApexProtocol_Crc16(bytes, 16U);
@@ -718,6 +981,7 @@ static bool Blackbox_LoadLogIndex(void)
     uint32_t write_address;
     uint16_t next_session;
     uint16_t wrapped;
+    uint16_t next_revision_id;
     uint32_t generation;
     uint16_t crc;
     uint16_t stored;
@@ -732,10 +996,14 @@ static bool Blackbox_LoadLogIndex(void)
     next_session = Blackbox_ReadU16(bytes, 8U);
     wrapped = Blackbox_ReadU16(bytes, 10U);
     generation = Blackbox_ReadU32(bytes, 12U);
+    next_revision_id = Blackbox_ReadU16(bytes, 18U);
     if ((write_address < BLACKBOX_LOG_START_ADDRESS) || (write_address > BLACKBOX_LOG_END_ADDRESS)) return false;
     if ((write_address % BLACKBOX_RECORD_SIZE) != 0U) return false;
     blackbox_log_write_address = write_address;
     blackbox_next_session_id = (next_session == 0U) ? 1U : next_session;
+    if ((next_revision_id == 0U) || (next_revision_id == 0xFFFFU)) next_revision_id = 1U;
+    blackbox_next_revision_id = next_revision_id;
+    blackbox_current_revision_id = (next_revision_id == 1U) ? 0U : (uint16_t)(next_revision_id - 1U);
     blackbox_log_wrapped = (wrapped != 0U);
     blackbox_log_index_generation = generation;
     return true;
@@ -776,6 +1044,13 @@ static void Blackbox_RecoverWritePointer(void)
                 if (blackbox_next_session_id == 0U) blackbox_next_session_id = 1U;
             }
         }
+        else if ((magic_bytes[4] == BLACKBOX_RECORD_TYPE_PID_REVISION) ||
+                 (magic_bytes[4] == BLACKBOX_RECORD_TYPE_PID_SAVE))
+        {
+            uint16_t revision_id = Blackbox_ReadU16(magic_bytes, 6U);
+            if (revision_id >= blackbox_current_revision_id) blackbox_current_revision_id = revision_id;
+            blackbox_next_revision_id = (blackbox_current_revision_id == 0xFFFFU) ? 1U : (uint16_t)(blackbox_current_revision_id + 1U);
+        }
         address += BLACKBOX_RECORD_SIZE;
         if (address >= BLACKBOX_LOG_END_ADDRESS)
         {
@@ -794,6 +1069,7 @@ static bool Blackbox_ScanLogEnd(void)
     uint32_t address;
     uint32_t magic;
     uint16_t max_session = 0U;
+    uint16_t max_revision = 0U;
     uint32_t used_records = 0U;
 
     blackbox_log_write_address = BLACKBOX_LOG_START_ADDRESS;
@@ -808,6 +1084,8 @@ static bool Blackbox_ScanLogEnd(void)
             blackbox_log_write_address = address;
             blackbox_next_session_id = (uint16_t)(max_session + 1U);
             if (blackbox_next_session_id == 0U) blackbox_next_session_id = 1U;
+            blackbox_current_revision_id = max_revision;
+            blackbox_next_revision_id = (max_revision == 0xFFFFU) ? 1U : (uint16_t)(max_revision + 1U);
             return true;
         }
         if (magic != BLACKBOX_RECORD_MAGIC)
@@ -815,6 +1093,8 @@ static bool Blackbox_ScanLogEnd(void)
             /* 老固件或损坏数据不当新日志，从起点覆盖，避免扫整片 8MB。 */
             blackbox_log_write_address = BLACKBOX_LOG_START_ADDRESS;
             blackbox_next_session_id = 1U;
+            blackbox_next_revision_id = 1U;
+            blackbox_current_revision_id = 0U;
             blackbox_log_wrapped = false;
             return true;
         }
@@ -824,6 +1104,12 @@ static bool Blackbox_ScanLogEnd(void)
             uint16_t session_id = Blackbox_ReadU16(magic_bytes, 6U);
             if (session_id > max_session) max_session = session_id;
         }
+        else if ((magic_bytes[4] == BLACKBOX_RECORD_TYPE_PID_REVISION) ||
+                 (magic_bytes[4] == BLACKBOX_RECORD_TYPE_PID_SAVE))
+        {
+            uint16_t revision_id = Blackbox_ReadU16(magic_bytes, 6U);
+            if (revision_id > max_revision) max_revision = revision_id;
+        }
         if ((used_records & 0x0FU) == 0U) vTaskDelay(1);
     }
     /* 日志区已满且还没有索引：写指针停在末尾，下一次写入再绕回起点。 */
@@ -831,6 +1117,8 @@ static bool Blackbox_ScanLogEnd(void)
     blackbox_log_wrapped = true;
     blackbox_next_session_id = (uint16_t)(max_session + 1U);
     if (blackbox_next_session_id == 0U) blackbox_next_session_id = 1U;
+    blackbox_current_revision_id = max_revision;
+    blackbox_next_revision_id = (max_revision == 0xFFFFU) ? 1U : (uint16_t)(max_revision + 1U);
     return true;
 }
 
@@ -884,7 +1172,17 @@ static bool Blackbox_WriteSessionBegin(void)
     for (index = 0U; index < 3U; index++) record.altitude.height_q10000[index] = values[APEX_PID_HEIGHT_KP + index];
     if (!GPS_GetUtcTime(&record.altitude.utc_seconds)) record.altitude.utc_seconds = 0U;
     blackbox_session_begin_utc_seconds = record.altitude.utc_seconds;
-    return Blackbox_AppendRecord(record.bytes);
+    if (!Blackbox_AppendRecord(record.bytes)) return false;
+
+    memset(&record, 0, sizeof(record));
+    record.position_params.magic = BLACKBOX_RECORD_MAGIC;
+    record.position_params.type = BLACKBOX_RECORD_TYPE_POSITION_PARAMS;
+    record.position_params.schema = BLACKBOX_RECORD_SCHEMA;
+    record.position_params.session_id = blackbox_active_session_id;
+    for (index = 0U; index < 6U; index++) record.position_params.position_q10000[index] = values[APEX_PID_POSITION_KP + index];
+    if (!Blackbox_AppendRecord(record.bytes)) return false;
+    (void)Blackbox_WriteLogIndex();
+    return true;
 }
 
 static bool Blackbox_WriteSessionEnd(void)
@@ -970,6 +1268,70 @@ static bool Blackbox_WritePositionSample(const BlackboxPositionSample_t *sample)
     return Blackbox_AppendRecord(record.bytes);
 }
 
+static uint16_t Blackbox_CurrentRecordSessionId(void)
+{
+    return blackbox_recording ? blackbox_active_session_id : blackbox_next_session_id;
+}
+
+static uint32_t Blackbox_CurrentRecordTimeMs(void)
+{
+    if (!blackbox_recording) return 0U;
+    return (uint32_t)(xTaskGetTickCount() - blackbox_session_start_tick);
+}
+
+static bool Blackbox_WritePidRevision(uint16_t revision_id, uint8_t operation, uint8_t changed_parameter_id, const int32_t *values_q10000)
+{
+    BlackboxFlashRecord_t record;
+    uint8_t fragment;
+    uint8_t start;
+    uint8_t count;
+    uint8_t index;
+
+    if (values_q10000 == NULL) return false;
+    for (fragment = 0U; fragment < BLACKBOX_PID_REVISION_FRAGMENT_COUNT; fragment++)
+    {
+        start = (uint8_t)(fragment * 10U);
+        count = (start >= APEX_PID_PARAMETER_COUNT) ? 0U : (uint8_t)(APEX_PID_PARAMETER_COUNT - start);
+        if (count > 10U) count = 10U;
+
+        memset(&record, 0, sizeof(record));
+        record.pid_revision.magic = BLACKBOX_RECORD_MAGIC;
+        record.pid_revision.type = BLACKBOX_RECORD_TYPE_PID_REVISION;
+        record.pid_revision.schema = BLACKBOX_RECORD_SCHEMA;
+        record.pid_revision.revision_id = revision_id;
+        record.pid_revision.t_ms = Blackbox_CurrentRecordTimeMs();
+        record.pid_revision.session_id = Blackbox_CurrentRecordSessionId();
+        record.pid_revision.fragment_index = fragment;
+        record.pid_revision.fragment_count = BLACKBOX_PID_REVISION_FRAGMENT_COUNT;
+        record.pid_revision.parameter_start = start;
+        record.pid_revision.parameter_count = count;
+        record.pid_revision.operation = operation;
+        record.pid_revision.changed_parameter_id = changed_parameter_id;
+        for (index = 0U; index < count; index++) record.pid_revision.values_q10000[index] = values_q10000[start + index];
+        if (!Blackbox_AppendRecord(record.bytes)) return false;
+    }
+    (void)Blackbox_WriteLogIndex();
+    return true;
+}
+
+static bool Blackbox_WritePidSaveMarker(uint32_t generation)
+{
+    BlackboxFlashRecord_t record;
+
+    memset(&record, 0, sizeof(record));
+    record.pid_save.magic = BLACKBOX_RECORD_MAGIC;
+    record.pid_save.type = BLACKBOX_RECORD_TYPE_PID_SAVE;
+    record.pid_save.schema = BLACKBOX_RECORD_SCHEMA;
+    record.pid_save.revision_id = blackbox_current_revision_id;
+    record.pid_save.t_ms = Blackbox_CurrentRecordTimeMs();
+    record.pid_save.generation = generation;
+    record.pid_save.session_id = Blackbox_CurrentRecordSessionId();
+    record.pid_save.operation = BLACKBOX_PID_REVISION_OPERATION_SAVE;
+    if (!Blackbox_AppendRecord(record.bytes)) return false;
+    (void)Blackbox_WriteLogIndex();
+    return true;
+}
+
 static void Blackbox_HandleSave(void)
 {
     int32_t values[APEX_PID_PARAMETER_COUNT];
@@ -983,6 +1345,7 @@ static void Blackbox_HandleSave(void)
     if (ok)
     {
         Blackbox_RememberSaved(values, generation);
+        if (!Blackbox_WritePidSaveMarker(generation)) Debug_Printf("[BB] pid save marker failed.\r\n");
         Debug_Printf("[BB] save gen=%lu ok.\r\n", (unsigned long)generation);
     }
     else Debug_Printf("[BB] save failed.\r\n");
@@ -1134,6 +1497,56 @@ static void Blackbox_PrintPositionSample(const BlackboxFlashRecord_t *record)
                  (unsigned int)fault_reason);
 }
 
+static void Blackbox_PrintPidRevision(const BlackboxFlashRecord_t *record)
+{
+    static const char *const names[APEX_PID_PARAMETER_COUNT] = {
+        "roll_outer_kp", "roll_outer_ki", "roll_outer_kd",
+        "roll_inner_kp", "roll_inner_ki", "roll_inner_kd",
+        "pitch_outer_kp", "pitch_outer_ki", "pitch_outer_kd",
+        "pitch_inner_kp", "pitch_inner_ki", "pitch_inner_kd",
+        "yaw_rate_kp", "yaw_rate_ki", "yaw_rate_kd",
+        "roll_max_rate", "roll_max_corr", "pitch_max_rate", "pitch_max_corr",
+        "yaw_max_rate", "yaw_max_corr", "roll_trim", "pitch_trim",
+        "yaw_angle_kp", "yaw_angle_ki", "yaw_angle_kd",
+        "vertical_speed_kp", "vertical_speed_ki", "vertical_speed_kd",
+        "max_throttle", "height_kp", "height_ki", "height_kd",
+        "position_kp", "position_ki", "position_kd",
+        "velocity_kp", "velocity_ki", "velocity_kd"
+    };
+    const char *changed_name = (record->pid_revision.changed_parameter_id < APEX_PID_PARAMETER_COUNT)
+                             ? names[record->pid_revision.changed_parameter_id]
+                             : "batch";
+    uint8_t index;
+
+    Debug_Printf("# pid_revision revision=%u session=%u t_ms=%lu op=%u changed=%u(%s) part=%u/%u start=%u count=%u",
+                 (unsigned int)record->pid_revision.revision_id,
+                 (unsigned int)record->pid_revision.session_id,
+                 (unsigned long)record->pid_revision.t_ms,
+                 (unsigned int)record->pid_revision.operation,
+                 (unsigned int)record->pid_revision.changed_parameter_id,
+                 changed_name,
+                 (unsigned int)(record->pid_revision.fragment_index + 1U),
+                 (unsigned int)record->pid_revision.fragment_count,
+                 (unsigned int)record->pid_revision.parameter_start,
+                 (unsigned int)record->pid_revision.parameter_count);
+    for (index = 0U; index < record->pid_revision.parameter_count; index++)
+    {
+        Debug_Printf(" %u=%.4f",
+                     (unsigned int)(record->pid_revision.parameter_start + index),
+                     (double)record->pid_revision.values_q10000[index] / 10000.0);
+    }
+    Debug_Printf("\r\n");
+}
+
+static void Blackbox_PrintPidSaveMarker(const BlackboxFlashRecord_t *record)
+{
+    Debug_Printf("# pid_save revision=%u session=%u t_ms=%lu generation=%lu\r\n",
+                 (unsigned int)record->pid_save.revision_id,
+                 (unsigned int)record->pid_save.session_id,
+                 (unsigned long)record->pid_save.t_ms,
+                 (unsigned long)record->pid_save.generation);
+}
+
 static uint32_t Blackbox_DumpStartAddress(uint32_t max_records)
 {
     uint32_t used = Blackbox_LogUsedRecords();
@@ -1224,6 +1637,24 @@ static void Blackbox_DumpLogs(uint32_t max_records)
                 pending_session_header = false;
             }
             Debug_Printf("# altitude vz_kp=%.2f vz_ki=%.2f vz_kd=%.2f max_thr=%.0f h_kp=%.2f h_ki=%.2f h_kd=%.2f utc=%lu\r\n", (double)record.altitude.altitude_q10000[0] / 10000.0, (double)record.altitude.altitude_q10000[1] / 10000.0, (double)record.altitude.altitude_q10000[2] / 10000.0, (double)record.altitude.altitude_q10000[3] / 10000.0, (double)record.altitude.height_q10000[0] / 10000.0, (double)record.altitude.height_q10000[1] / 10000.0, (double)record.altitude.height_q10000[2] / 10000.0, (unsigned long)record.altitude.utc_seconds);
+        }
+        else if (record.position_params.type == BLACKBOX_RECORD_TYPE_POSITION_PARAMS)
+        {
+            Debug_Printf("# position_params position_kp=%.4f position_ki=%.4f position_kd=%.4f velocity_kp=%.4f velocity_ki=%.4f velocity_kd=%.4f\r\n",
+                         (double)record.position_params.position_q10000[0] / 10000.0,
+                         (double)record.position_params.position_q10000[1] / 10000.0,
+                         (double)record.position_params.position_q10000[2] / 10000.0,
+                         (double)record.position_params.position_q10000[3] / 10000.0,
+                         (double)record.position_params.position_q10000[4] / 10000.0,
+                         (double)record.position_params.position_q10000[5] / 10000.0);
+        }
+        else if (record.pid_revision.type == BLACKBOX_RECORD_TYPE_PID_REVISION)
+        {
+            Blackbox_PrintPidRevision(&record);
+        }
+        else if (record.pid_save.type == BLACKBOX_RECORD_TYPE_PID_SAVE)
+        {
+            Blackbox_PrintPidSaveMarker(&record);
         }
         else if (record.sample.type == BLACKBOX_RECORD_TYPE_SAMPLE)
         {
@@ -1400,6 +1831,58 @@ static void Blackbox_HandleMagCalibration(const char *cursor)
     else Debug_Printf("[MAG_CAL] use calmag start|stop|status|cancel.\r\n");
 }
 
+static void Blackbox_PrintImuCalibrationStatus(void)
+{
+    IMU_AccelCalibrationControllerStatus_t status;
+
+    IMU_AccelCalibration_GetControllerStatus(&status);
+    Debug_Printf("[IMU_CAL] st=%u pose=%u/%u n=%lu/%lu err=%u active=%u\r\n",
+                 (unsigned int)status.state,
+                 (unsigned int)status.completed_pose_count,
+                 (unsigned int)IMU_ACCEL_CAL_POSE_COUNT,
+                 (unsigned long)status.accepted_sample_count,
+                 (unsigned long)status.target_sample_count,
+                 (unsigned int)status.last_error,
+                 status.active_calibration_valid ? 1U : 0U);
+}
+
+static void Blackbox_HandleImuCalibration(const char *cursor)
+{
+    if (Blackbox_MatchToken(&cursor, "START"))
+    {
+        if (blackbox_recording)
+        {
+            Debug_Printf("[IMU_CAL] disarm first.\r\n");
+        }
+        else if (IMU_AccelCalibration_RequestStart(200U))
+        {
+            Debug_Printf("[IMU_CAL] started; place X+ then send calimu next.\r\n");
+        }
+        else Debug_Printf("[IMU_CAL] start rejected; status is busy.\r\n");
+    }
+    else if (Blackbox_MatchToken(&cursor, "NEXT"))
+    {
+        if (IMU_AccelCalibration_RequestNext()) Debug_Printf("[IMU_CAL] sampling requested.\r\n");
+        else Debug_Printf("[IMU_CAL] next rejected; send calimu status.\r\n");
+    }
+    else if (Blackbox_MatchToken(&cursor, "STATUS"))
+    {
+        Blackbox_PrintImuCalibrationStatus();
+    }
+    else if (Blackbox_MatchToken(&cursor, "SAVE"))
+    {
+        if (blackbox_recording) Debug_Printf("[IMU_CAL] disarm first.\r\n");
+        else if (Blackbox_QueueImuCalSave()) Debug_Printf("[IMU_CAL] save queued.\r\n");
+        else Debug_Printf("[IMU_CAL] save rejected; finish six poses and stop logging first.\r\n");
+    }
+    else if (Blackbox_MatchToken(&cursor, "CANCEL"))
+    {
+        IMU_AccelCalibration_RequestCancel();
+        Debug_Printf("[IMU_CAL] cancel requested.\r\n");
+    }
+    else Debug_Printf("[IMU_CAL] use calimu start|next|status|save|cancel.\r\n");
+}
+
 static void Blackbox_HandleCommandLine(void)
 {
     const char *cursor;
@@ -1417,7 +1900,8 @@ static void Blackbox_HandleCommandLine(void)
     else if (Blackbox_MatchToken(&cursor, "DUMPALL")) Blackbox_DumpAllRaw(Blackbox_ParseOptionalCount(cursor));
     else if (Blackbox_MatchToken(&cursor, "DUMP")) Blackbox_DumpLogs(Blackbox_ParseOptionalCount(cursor));
     else if (Blackbox_MatchToken(&cursor, "CALMAG")) Blackbox_HandleMagCalibration(cursor);
-    else if (Blackbox_MatchToken(&cursor, "HELP")) Debug_Printf("[BB] commands: dump [N|all] dumpall [N|all] calmag start|stop|status|cancel stop\r\n");
+    else if (Blackbox_MatchToken(&cursor, "CALIMU")) Blackbox_HandleImuCalibration(cursor);
+    else if (Blackbox_MatchToken(&cursor, "HELP")) Debug_Printf("[BB] commands: dump [N|all] dumpall [N|all] calmag start|stop|status|cancel calimu start|next|status|save|cancel stop\r\n");
     else Debug_Printf("[BB] unknown cmd, send dump dumpall calmag or stop\r\n");
     blackbox_command_length = 0U;
     blackbox_command[0] = '\0';
@@ -1485,13 +1969,19 @@ static bool Blackbox_Initialize(void)
     blackbox_recording = false;
     blackbox_save_pending = false;
     blackbox_mag_cal_save_pending = false;
+    blackbox_imu_cal_save_pending = false;
     blackbox_has_saved = false;
     blackbox_has_saved_mag_cal = false;
     blackbox_mag_cal_generation = 0U;
     memset(&blackbox_saved_mag_cal, 0, sizeof(blackbox_saved_mag_cal));
+    blackbox_imu_cal_generation = 0U;
+    memset(&blackbox_saved_imu_cal, 0, sizeof(blackbox_saved_imu_cal));
+    IMU_AccelCalibration_SetActive(NULL);
     blackbox_dropped_samples = 0U;
     blackbox_parameter_generation = 0U;
     blackbox_next_session_id = 1U;
+    blackbox_next_revision_id = 1U;
+    blackbox_current_revision_id = 0U;
     blackbox_log_write_address = BLACKBOX_LOG_START_ADDRESS;
     blackbox_log_index_generation = 0U;
     blackbox_log_wrapped = false;
@@ -1512,6 +2002,8 @@ static bool Blackbox_Initialize(void)
     else Debug_Printf("[BB] no saved pid, using defaults.\r\n");
     if (Blackbox_ApplyBestMagCalSlot()) (void)blackbox_mag_cal_generation;
     else Debug_Printf("[MAG_CAL] no saved offset, heading stays uncalibrated.\r\n");
+    if (Blackbox_ApplyBestImuCalSlot()) Debug_Printf("[IMU_CAL] saved accelerometer calibration loaded.\r\n");
+    else Debug_Printf("[IMU_CAL] no saved accelerometer calibration, using raw accelerometer.\r\n");
     /* 先放行 SAVE，再扫日志，避免上电 SPI 长扫描拖死电机任务。 */
     blackbox_ready = true;
     vTaskDelay(pdMS_TO_TICKS(50U));
@@ -1556,6 +2048,12 @@ bool Blackbox_RequestSave(void)
         return false;
     }
     return true;
+}
+
+bool Blackbox_RequestPidRevision(uint8_t operation, uint8_t parameter_id, const int32_t *values_q10000)
+{
+    if (!blackbox_ready) return false;
+    return Blackbox_QueuePidRevisionJob(operation, parameter_id, values_q10000);
 }
 
 bool Blackbox_RequestMagCalibrationSave(void)
@@ -1616,8 +2114,19 @@ void Blackbox_Task(void *argument)
             {
                 if (job.type == BLACKBOX_JOB_SAVE) Blackbox_HandleSave();
                 else if (job.type == BLACKBOX_JOB_SAVE_MAG_CAL) Blackbox_HandleMagCalSave();
+                else if (job.type == BLACKBOX_JOB_SAVE_IMU_CAL) Blackbox_HandleImuCalSave();
                 else if (job.type == BLACKBOX_JOB_ARM) Blackbox_HandleArm();
                 else if (job.type == BLACKBOX_JOB_DISARM) Blackbox_HandleDisarm();
+                else if (job.type == BLACKBOX_JOB_PID_REVISION)
+                {
+                    if (!Blackbox_WritePidRevision(job.pid_revision_id,
+                                                   job.pid_operation,
+                                                   job.pid_changed_parameter_id,
+                                                   job.pid_values_q10000))
+                    {
+                        Debug_Printf("[BB] pid revision write failed.\r\n");
+                    }
+                }
                 else if ((job.type == BLACKBOX_JOB_SAMPLE) && blackbox_recording)
                 {
                     if (!Blackbox_WriteSample(&job.sample))

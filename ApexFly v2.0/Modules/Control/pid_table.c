@@ -1,6 +1,6 @@
 /**
  * @file pid_table.c
- * @brief RAM 参数表实现：30 个协议 ID 与姿态串级、满杆油门上限互转。
+ * @brief RAM 参数表实现：姿态、定高、定点参数与在线保存。
  *
  * 增益和限幅改完后只刷新 Pid_t 的数字并 Reset 积分，不重新 Init 整轴以外的状态机。
  * 限幅语义（#26）：遥控只能设 out_max（MAX_RATE_DPS / MAX_CORRECTION_US）；
@@ -24,9 +24,9 @@
 #include <string.h>
 
 /* 参数集版本号，随 PID 回包发给遥控器（遥控端当前不判它，仅作记录/排障线索）。
-   ⚠️ 2026-09-15 由 2 抬到 3：参数个数 30 → 33（新增高度环三项），
+   ⚠️ OF15 由 3 抬到 4：参数个数 33 → 39（新增定点两环六项），
       抬上去之后回包里就能看出"这一版参数表是哪一代"。 */
-#define PID_TABLE_PARAMETER_VERSION 3U
+#define PID_TABLE_PARAMETER_VERSION 4U
 #define PID_TABLE_GAIN_MAX 50.0f
 #define PID_TABLE_VZ_KP_MAX 500.0f
 #define PID_TABLE_VZ_KI_MAX 100.0f
@@ -37,6 +37,14 @@
 #define PID_TABLE_H_KP_MAX 5.0f
 #define PID_TABLE_H_KI_MAX 2.0f
 #define PID_TABLE_H_KD_MAX 5.0f
+/* 定点位置环量纲：count -> count/s。默认沿用 OF6 的位置 Kp，I/D 先为 0。 */
+#define PID_TABLE_POSITION_KP_MAX 5.0f
+#define PID_TABLE_POSITION_KI_MAX 2.0f
+#define PID_TABLE_POSITION_KD_MAX 5.0f
+/* 定点速度环量纲：count/s -> deg。默认沿用 OF6 的速度 Kp，I/D 先为 0。 */
+#define PID_TABLE_VELOCITY_KP_MAX 0.5f
+#define PID_TABLE_VELOCITY_KI_MAX 0.1f
+#define PID_TABLE_VELOCITY_KD_MAX 0.1f
 #define PID_TABLE_MAX_THROTTLE_MIN_US 1200.0f
 #define PID_TABLE_MAX_THROTTLE_MAX_US 2000.0f
 #define PID_TABLE_RATE_MIN 20.0f
@@ -63,6 +71,16 @@ typedef struct
     /* 满杆对应的最高油门，单位微秒。注意：不是"悬停需要多少油门"。 */
     float max_throttle_us;
 } PidTableAltitudeParams_t;
+
+typedef struct
+{
+    float position_kp;
+    float position_ki;
+    float position_kd;
+    float velocity_kp;
+    float velocity_ki;
+    float velocity_kd;
+} PidTablePositionParams_t;
 
 #define PID_TABLE_ALTITUDE_DEFAULT_VZ_KP            100.0f
 #define PID_TABLE_ALTITUDE_DEFAULT_VZ_KI            0.0f
@@ -104,6 +122,12 @@ typedef struct
    ⚠️ 它**只影响普通模式**。定高模式的油门权限是 vertical_control.h 里
       自己的 [1150, 1650] 常量，**刻意不跟这个值联动**，避免"调手动手感意外改定高"。 */
 #define PID_TABLE_ALTITUDE_DEFAULT_MAX_THROTTLE_US  2000.0f
+#define PID_TABLE_POSITION_DEFAULT_KP               0.50f
+#define PID_TABLE_POSITION_DEFAULT_KI               0.0f
+#define PID_TABLE_POSITION_DEFAULT_KD               0.0f
+#define PID_TABLE_VELOCITY_DEFAULT_KP               0.010f
+#define PID_TABLE_VELOCITY_DEFAULT_KI               0.0f
+#define PID_TABLE_VELOCITY_DEFAULT_KD               0.0f
 
 static void PidTable_AltitudeResetDefaults(PidTableAltitudeParams_t *altitude)
 {
@@ -116,10 +140,21 @@ static void PidTable_AltitudeResetDefaults(PidTableAltitudeParams_t *altitude)
     altitude->max_throttle_us = PID_TABLE_ALTITUDE_DEFAULT_MAX_THROTTLE_US;
 }
 
+static void PidTable_PositionResetDefaults(PidTablePositionParams_t *position)
+{
+    position->position_kp = PID_TABLE_POSITION_DEFAULT_KP;
+    position->position_ki = PID_TABLE_POSITION_DEFAULT_KI;
+    position->position_kd = PID_TABLE_POSITION_DEFAULT_KD;
+    position->velocity_kp = PID_TABLE_VELOCITY_DEFAULT_KP;
+    position->velocity_ki = PID_TABLE_VELOCITY_DEFAULT_KI;
+    position->velocity_kd = PID_TABLE_VELOCITY_DEFAULT_KD;
+}
+
 typedef struct
 {
     AttitudePidParams_t pid;
     PidTableAltitudeParams_t altitude;
+    PidTablePositionParams_t position;
     float roll_trim_deg;
     float pitch_trim_deg;
 } PidTableState_t;
@@ -184,6 +219,12 @@ static void PidTable_ExportValues(int32_t *values_q10000)
     values_q10000[APEX_PID_HEIGHT_KP] = PidTable_FloatToQ10000(pid_table.altitude.h_kp);
     values_q10000[APEX_PID_HEIGHT_KI] = PidTable_FloatToQ10000(pid_table.altitude.h_ki);
     values_q10000[APEX_PID_HEIGHT_KD] = PidTable_FloatToQ10000(pid_table.altitude.h_kd);
+    values_q10000[APEX_PID_POSITION_KP] = PidTable_FloatToQ10000(pid_table.position.position_kp);
+    values_q10000[APEX_PID_POSITION_KI] = PidTable_FloatToQ10000(pid_table.position.position_ki);
+    values_q10000[APEX_PID_POSITION_KD] = PidTable_FloatToQ10000(pid_table.position.position_kd);
+    values_q10000[APEX_PID_VELOCITY_KP] = PidTable_FloatToQ10000(pid_table.position.velocity_kp);
+    values_q10000[APEX_PID_VELOCITY_KI] = PidTable_FloatToQ10000(pid_table.position.velocity_ki);
+    values_q10000[APEX_PID_VELOCITY_KD] = PidTable_FloatToQ10000(pid_table.position.velocity_kd);
 }
 
 static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
@@ -247,6 +288,24 @@ static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
     case APEX_PID_HEIGHT_KD:
         if ((value < 0.0f) || (value > PID_TABLE_H_KD_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
         break;
+    case APEX_PID_POSITION_KP:
+        if ((value < 0.0f) || (value > PID_TABLE_POSITION_KP_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_POSITION_KI:
+        if ((value < 0.0f) || (value > PID_TABLE_POSITION_KI_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_POSITION_KD:
+        if ((value < 0.0f) || (value > PID_TABLE_POSITION_KD_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_VELOCITY_KP:
+        if ((value < 0.0f) || (value > PID_TABLE_VELOCITY_KP_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_VELOCITY_KI:
+        if ((value < 0.0f) || (value > PID_TABLE_VELOCITY_KI_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
+    case APEX_PID_VELOCITY_KD:
+        if ((value < 0.0f) || (value > PID_TABLE_VELOCITY_KD_MAX)) return APEX_PID_STATUS_OUT_OF_RANGE;
+        break;
     default:
         return APEX_PID_STATUS_INVALID_PARAMETER;
     }
@@ -304,6 +363,12 @@ static ApexPidStatus_t PidTable_SetValue(uint8_t parameter_id, float value)
     case APEX_PID_HEIGHT_KP: pid_table.altitude.h_kp = value; break;
     case APEX_PID_HEIGHT_KI: pid_table.altitude.h_ki = value; break;
     case APEX_PID_HEIGHT_KD: pid_table.altitude.h_kd = value; break;
+    case APEX_PID_POSITION_KP: pid_table.position.position_kp = value; break;
+    case APEX_PID_POSITION_KI: pid_table.position.position_ki = value; break;
+    case APEX_PID_POSITION_KD: pid_table.position.position_kd = value; break;
+    case APEX_PID_VELOCITY_KP: pid_table.position.velocity_kp = value; break;
+    case APEX_PID_VELOCITY_KI: pid_table.position.velocity_ki = value; break;
+    case APEX_PID_VELOCITY_KD: pid_table.position.velocity_kd = value; break;
     default:
         return APEX_PID_STATUS_INVALID_PARAMETER;
     }
@@ -384,6 +449,38 @@ void PidTable_GetHeightParams(float *h_kp, float *h_ki, float *h_kd)
     if (h_kd != NULL) *h_kd = kd;
 }
 
+void PidTable_GetPositionParams(float *kp, float *ki, float *kd)
+{
+    float value_kp;
+    float value_ki;
+    float value_kd;
+
+    taskENTER_CRITICAL();
+    value_kp = pid_table.position.position_kp;
+    value_ki = pid_table.position.position_ki;
+    value_kd = pid_table.position.position_kd;
+    taskEXIT_CRITICAL();
+    if (kp != NULL) *kp = value_kp;
+    if (ki != NULL) *ki = value_ki;
+    if (kd != NULL) *kd = value_kd;
+}
+
+void PidTable_GetVelocityParams(float *kp, float *ki, float *kd)
+{
+    float value_kp;
+    float value_ki;
+    float value_kd;
+
+    taskENTER_CRITICAL();
+    value_kp = pid_table.position.velocity_kp;
+    value_ki = pid_table.position.velocity_ki;
+    value_kd = pid_table.position.velocity_kd;
+    taskEXIT_CRITICAL();
+    if (kp != NULL) *kp = value_kp;
+    if (ki != NULL) *ki = value_ki;
+    if (kd != NULL) *kd = value_kd;
+}
+
 void PidTable_GetAltitudeParams(float *vz_kp, float *vz_ki, float *vz_kd)
 {
     float kp;
@@ -418,6 +515,7 @@ static void PidTable_LoadCompiledDefaults(void)
     taskENTER_CRITICAL();
     pid_table.pid = *AttitudeControl_GetDefaultParams();
     PidTable_AltitudeResetDefaults(&pid_table.altitude);
+    PidTable_PositionResetDefaults(&pid_table.position);
     pid_table.roll_trim_deg = 0.0f;
     pid_table.pitch_trim_deg = 0.0f;
     taskEXIT_CRITICAL();
@@ -432,6 +530,7 @@ void PidTable_Init(void)
         memset(&pid_table, 0, sizeof(pid_table));
         pid_table.pid = *AttitudeControl_GetDefaultParams();
         PidTable_AltitudeResetDefaults(&pid_table.altitude);
+        PidTable_PositionResetDefaults(&pid_table.position);
         pid_table_ready = true;
         taskEXIT_CRITICAL();
         AttitudeControl_ApplyParams(&pid_table.pid);
@@ -444,6 +543,7 @@ void PidTable_HandleCommand(const ApexPidCommand_t *command, bool armed, ApexPid
 {
     ApexPidStatus_t status;
     float value;
+    int32_t revision_values_q10000[APEX_PID_PARAMETER_COUNT];
 
     if ((command == NULL) || (response == NULL)) return;
 
@@ -473,6 +573,10 @@ void PidTable_HandleCommand(const ApexPidCommand_t *command, bool armed, ApexPid
         if (status == APEX_PID_STATUS_OK)
         {
             AttitudeControl_ApplyParams(&pid_table.pid);
+            PidTable_ExportSnapshot(revision_values_q10000);
+            (void)Blackbox_RequestPidRevision(BLACKBOX_PID_REVISION_OPERATION_SET,
+                                               command->parameter_id,
+                                               revision_values_q10000);
         }
         taskENTER_CRITICAL();
         PidTable_FillResponse(response, command->sequence, command->operation, status);
@@ -486,6 +590,10 @@ void PidTable_HandleCommand(const ApexPidCommand_t *command, bool armed, ApexPid
             return;
         }
         PidTable_LoadCompiledDefaults();
+        PidTable_ExportSnapshot(revision_values_q10000);
+        (void)Blackbox_RequestPidRevision(BLACKBOX_PID_REVISION_OPERATION_LOAD_DEFAULTS,
+                                           BLACKBOX_PID_REVISION_BATCH_PARAMETER_ID,
+                                           revision_values_q10000);
         PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_OK);
         return;
 
@@ -524,6 +632,10 @@ void PidTable_HandleCommand(const ApexPidCommand_t *command, bool armed, ApexPid
             PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_STORAGE_ERROR);
             return;
         }
+        PidTable_ExportSnapshot(revision_values_q10000);
+        (void)Blackbox_RequestPidRevision(BLACKBOX_PID_REVISION_OPERATION_LOAD_SAVED,
+                                           BLACKBOX_PID_REVISION_BATCH_PARAMETER_ID,
+                                           revision_values_q10000);
         PidTable_FillResponse(response, command->sequence, command->operation, APEX_PID_STATUS_OK);
         return;
 

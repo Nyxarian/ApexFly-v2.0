@@ -8,8 +8,8 @@
  * 流程：
  * 1. 初始化电机和 MPU6050
  * 2. 四路 1000us 保持 3 秒，电调解锁
- * 3. 静置采集陀螺仪零偏 200 点
- * 4. 静置采集机体系横滚/俯仰水平零点 200 点，之后控制角减这个平均
+ * 3. 静置采集陀螺仪零偏 500 点
+ * 4. 用重力姿态直接得到机体系横滚/俯仰，不再按当前停放地面动态清零
  * 5. 停在 1000us 等待遥控
  * 6. 250Hz：刷新失联 → 读快照 → 已解锁则把油门杆映射成基础油门（再经速率限制），然后进串级混控
  *
@@ -32,11 +32,12 @@
 #include "blackbox.h"
 #include "cmsis_os.h"
 #include "control_link.h"
+#include "debug.h"
 #include "FreeRTOS.h"
 #include "i2c.h"
 #include "imu_attitude.h"
+#include "imu_accel_calibration.h"
 #include "imu_bias.h"
-#include "imu_level.h"
 #include "mag.h"
 #include "mixer.h"
 #include "motor.h"
@@ -53,7 +54,6 @@
 
 #define ESC_ARM_WAIT_MS 3000U
 #define IMU_BIAS_SAMPLE_COUNT 500U
-#define IMU_LEVEL_SAMPLE_COUNT 200U
 /* 控制环 250Hz（4ms），一次 DRDY = 一帧控制。本值只用于 DRDY 兜底与回退路径。 */
 #define IMU_SAMPLE_PERIOD_MS 4U
 /* 上电初值，实测 dt 之后会被真实周期覆盖（传感器 250Hz 实际约 4008us）。 */
@@ -221,19 +221,6 @@ static float MotorTest_ThrottleRampLimit(float current_us, float target_us, floa
     return output_us;
 }
 
-/* 水平零点采集门禁：机体必须静止、接近水平、加计模长正常。
-   任一不满足就清空累加器重新开始，避免把斜放或晃动采成永久零点。 */
-static bool MotorTest_LevelSampleValid(const MPU6050_Data_t *data, const IMU_BodyAttitude_t *body)
-{
-    float accel_norm_sq;
-
-    accel_norm_sq = (data->accel_x_g * data->accel_x_g) + (data->accel_y_g * data->accel_y_g) + (data->accel_z_g * data->accel_z_g);
-    if ((accel_norm_sq < 0.9025f) || (accel_norm_sq > 1.2100f)) return false;
-    if ((MotorTest_Absf(body->roll_deg) > 8.0f) || (MotorTest_Absf(body->pitch_deg) > 8.0f)) return false;
-    if ((MotorTest_Absf(data->gyro_x_dps) > 2.0f) || (MotorTest_Absf(data->gyro_y_dps) > 2.0f) || (MotorTest_Absf(data->gyro_z_dps) > 2.0f)) return false;
-    return true;
-}
-
 static int16_t MotorTest_MagHeadingCdeg(bool *calibration_valid)
 {
     MagSnapshot_t mag;
@@ -275,7 +262,6 @@ void MotorTest_Task(void *argument)
     static MPU6050_Device_t imu_device;
     static MPU6050_Data_t imu_data;
     static IMU_GyroBiasCollector_t bias_collector;
-    static IMU_LevelCollector_t level_collector;
     static IMU_Attitude_t attitude;
     static IMU_BodyAttitude_t body;
     static MixerOutput_t mixer_output;
@@ -285,7 +271,6 @@ void MotorTest_Task(void *argument)
     static VerticalControlSnapshot_t vertical_control_state;
     MPU6050_Status_t status;
     bool bias_ready;
-    bool level_ready;
     bool armed;
     bool was_armed;
     bool position_control_permission;
@@ -311,9 +296,13 @@ void MotorTest_Task(void *argument)
     float pitch_trim_deg;
     float position_roll_offset_deg;
     float position_pitch_offset_deg;
+    float raw_accel_x_g;
+    float raw_accel_y_g;
+    float raw_accel_z_g;
 
     (void)argument;
     MotorTest_TimebaseInit();
+    IMU_AccelCalibration_ControllerInit();
     /* 先建好 DRDY 信号量，之后 EXTI0 一来脉冲就能被接住。 */
     imu_drdy_semaphore = xSemaphoreCreateBinaryStatic(&imu_drdy_semaphore_storage);
     PidTable_Init();
@@ -354,7 +343,6 @@ void MotorTest_Task(void *argument)
         }
 
         IMU_GyroBias_Start(&bias_collector, IMU_BIAS_SAMPLE_COUNT);
-        IMU_Level_Start(&level_collector, IMU_LEVEL_SAMPLE_COUNT);
         IMU_Attitude_Init(&attitude);
         AttitudeControl_Reset();
         /* 高度/垂速估计器跟着一起重新起步：IMU 重新初始化后姿态角会跳，
@@ -364,7 +352,6 @@ void MotorTest_Task(void *argument)
         VerticalControl_Init();
         PositionControl_SetSafetyContext(false, false, false);
         bias_ready = false;
-        level_ready = false;
         was_armed = false;
         last_imu_cycles = 0U;
         dt_us = 0U;
@@ -428,33 +415,17 @@ void MotorTest_Task(void *argument)
                并把 dt 统计弄脏。需要观察姿态数据时看黑匣子样本，
                或在本文件外临时挂调试代码，验证完立即删除。 */
             IMU_GyroBias_Apply(&bias_collector.bias, &imu_data);
+            raw_accel_x_g = imu_data.accel_x_g;
+            raw_accel_y_g = imu_data.accel_y_g;
+            raw_accel_z_g = imu_data.accel_z_g;
+            IMU_AccelCalibration_ApplyActive(&imu_data.accel_x_g, &imu_data.accel_y_g, &imu_data.accel_z_g);
             if (!IMU_Attitude_Update(&attitude, &imu_data, control_dt_s))
             {
                 continue;
             }
             IMU_Attitude_MapToBody(&attitude, &imu_data, &body);
-
-            if (!level_ready)
-            {
-                if (!MotorTest_LevelSampleValid(&imu_data, &body))
-                {
-                    /* 门禁不通过：清空累加器重来，避免斜放/晃动污染零点。 */
-                    IMU_Level_Start(&level_collector, IMU_LEVEL_SAMPLE_COUNT);
-                    continue;
-                }
-
-                if (!IMU_Level_Update(&level_collector, &body))
-                {
-                    continue;
-                }
-
-                level_ready = true;
-                Motor_Disarm();
-                AttitudeControl_Reset();
-                continue;
-            }
-
-            IMU_Level_Apply(&level_collector.offset, &body);
+            /* 姿态打印由低优先级 ToF 任务节流发送；控制环这里只发布快照。 */
+            Debug_SetAttitudeSnapshot(body.roll_deg, body.pitch_deg, body.yaw_deg);
 
             /* 高度直接读 ToF 任务算好的结果：只做一次 32 位整数读取，
                不碰 I2C2 锁，绝不会拖慢 250Hz 控制环。
@@ -477,6 +448,10 @@ void MotorTest_Task(void *argument)
             ControlLink_Update((uint32_t)osKernelGetTickCount());
             ControlLink_GetSnapshot(&link);
             armed = link.connected && link.command_valid && ((link.command.flags & APEX_CONTROL_FLAG_ARM_REQUESTED) != 0U);
+
+            IMU_AccelCalibration_ProcessSample(!armed,
+                                               raw_accel_x_g, raw_accel_y_g, raw_accel_z_g,
+                                               imu_data.gyro_x_dps, imu_data.gyro_y_dps, imu_data.gyro_z_dps);
 
             /* 内环（角速度环）未启用时拒绝解锁：此时姿态环没有阻尼，起飞必然发散。 */
             if (armed && !AttitudeControl_IsInnerLoopEnabled())

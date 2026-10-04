@@ -34,6 +34,10 @@ static char debug_printf_buffer[DEBUG_PRINTF_BUFFER_SIZE];
 /* 静态互斥锁不占用 FreeRTOS 堆内存。 */
 static StaticSemaphore_t debug_mutex_storage;
 static SemaphoreHandle_t debug_mutex;
+static float debug_attitude_roll_deg;
+static float debug_attitude_pitch_deg;
+static float debug_attitude_yaw_deg;
+static bool debug_attitude_valid;
 
 /**
  * @brief 创建互斥锁。可以重复调用，只会创建一次。
@@ -46,6 +50,32 @@ void Debug_Init(void)
         debug_mutex = xSemaphoreCreateMutexStatic(&debug_mutex_storage);
     }
     taskEXIT_CRITICAL();
+}
+
+void Debug_SetAttitudeSnapshot(float roll_deg, float pitch_deg, float yaw_deg)
+{
+    taskENTER_CRITICAL();
+    debug_attitude_roll_deg = roll_deg;
+    debug_attitude_pitch_deg = pitch_deg;
+    debug_attitude_yaw_deg = yaw_deg;
+    debug_attitude_valid = true;
+    taskEXIT_CRITICAL();
+}
+
+bool Debug_GetAttitudeSnapshot(float *roll_deg, float *pitch_deg, float *yaw_deg)
+{
+    bool valid;
+
+    taskENTER_CRITICAL();
+    valid = debug_attitude_valid;
+    if (valid)
+    {
+        if (roll_deg != NULL) *roll_deg = debug_attitude_roll_deg;
+        if (pitch_deg != NULL) *pitch_deg = debug_attitude_pitch_deg;
+        if (yaw_deg != NULL) *yaw_deg = debug_attitude_yaw_deg;
+    }
+    taskEXIT_CRITICAL();
+    return valid;
 }
 
 /**

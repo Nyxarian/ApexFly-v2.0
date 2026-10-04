@@ -697,6 +697,16 @@
               <FileType>5</FileType>
               <FilePath>..\Modules\IMU\imu_level.h</FilePath>
             </File>
+            <File>
+              <FileName>imu_accel_calibration.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\Modules\IMU\imu_accel_calibration.c</FilePath>
+            </File>
+            <File>
+              <FileName>imu_accel_calibration.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>..\Modules\IMU\imu_accel_calibration.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

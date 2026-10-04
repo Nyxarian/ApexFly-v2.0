@@ -1,6 +1,6 @@
 /**
  * @file pid_table.h
- * @brief 飞机端 RAM 参数表：对接遥控 0x07 的 30 个姿态/油门参数 ID。
+ * @brief 飞机端 RAM 参数表：对接遥控 0x07 的姿态、定高和定点参数 ID。
  *
  * 本模块把协议 ID 映射到 attitude_control 的串级参数，以及满杆油门上限。
  * GET 回整张表；SET 改一项后立刻写进正在跑的 PID 或油门映射。
@@ -26,12 +26,12 @@ extern "C" {
 #endif
 
 /**
- * @brief 用编译默认值初始化 RAM 表，并灌进三轴串级 PID。
+ * @brief 用编译默认值初始化 RAM 表，并灌进姿态参数。
  */
 void PidTable_Init(void);
 
 /**
- * @brief 处理一条遥控 PID 命令，结果写入 response，始终带回整张 30 项表。
+ * @brief 处理一条遥控 PID 命令，结果写入 response，始终带回整张 39 项表。
  * @param command 已解码的 PID 命令。
  * @param armed true 表示当前已解锁，SET 将被拒绝。
  * @param response 应答，调用者负责发出去。
@@ -94,6 +94,12 @@ void PidTable_GetAltitudeParams(float *vz_kp, float *vz_ki, float *vz_kd);
  *             这里测量值是 `h_est`，所以它实际相当于一个 `−h_kd × vz` 的速度反馈项。
  */
 void PidTable_GetHeightParams(float *h_kp, float *h_ki, float *h_kd);
+
+/** @brief 读取定点位置环三增益。 */
+void PidTable_GetPositionParams(float *kp, float *ki, float *kd);
+
+/** @brief 读取定点速度环三增益。 */
+void PidTable_GetVelocityParams(float *kp, float *ki, float *kd);
 
 /**
  * @brief 读取横滚、俯仰 Trim，加在跟杆目标角上，单位度。

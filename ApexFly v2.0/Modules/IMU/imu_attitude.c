@@ -32,6 +32,10 @@
 #define IMU_ATTITUDE_INTEGRAL_LIMIT_RAD_S 0.20f
 #define IMU_ATTITUDE_QUATERNION_NORM_MIN 0.000001f
 #define IMU_ATTITUDE_FINITE_ABS_LIMIT 1000000.0f
+/* 阶段 2A：机架确认水平后测得的固定姿态偏置。
+   约定为 corrected = raw + trim；不随每次上电重新采样。后续再迁移到持久化校准参数。 */
+#define IMU_ATTITUDE_MOUNT_ROLL_TRIM_DEG  (-0.14f)
+#define IMU_ATTITUDE_MOUNT_PITCH_TRIM_DEG (-0.87f)
 
 static bool IMU_Attitude_IsFinite(float value)
 {
@@ -285,8 +289,8 @@ void IMU_Attitude_MapToBody(const IMU_Attitude_t *attitude, const MPU6050_Data_t
     IMU_Attitude_GetChipEuler(attitude, &chip_roll_deg, &chip_pitch_deg, &chip_yaw_deg);
 
     /* 保持当前已实测的芯片系到机体系映射，不改变姿态 PID 极性。 */
-    body->roll_deg = chip_pitch_deg;
-    body->pitch_deg = chip_roll_deg;
+    body->roll_deg = chip_pitch_deg + IMU_ATTITUDE_MOUNT_ROLL_TRIM_DEG;
+    body->pitch_deg = chip_roll_deg + IMU_ATTITUDE_MOUNT_PITCH_TRIM_DEG;
     body->yaw_deg = -chip_yaw_deg;
     body->roll_rate_dps = data->gyro_y_dps;
     body->pitch_rate_dps = data->gyro_x_dps;

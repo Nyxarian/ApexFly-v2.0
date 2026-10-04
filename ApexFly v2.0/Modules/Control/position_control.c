@@ -8,20 +8,22 @@
 
 #include "position_control.h"
 
+#ifdef POSITION_CONTROL_SIM
+#include "pid_table_sim.h"
+#else
+#include "pid_table.h"
+#endif
+
 #include <stddef.h>
 
-/* 光流相对机体系的初始 yaw 安装角。OF6 台架四方向复核后才允许改。 */
-#define POSITION_CONTROL_COS_YAW 0.5299f
-#define POSITION_CONTROL_SIN_YAW 0.8480f
+/* 光流相对机体系的 yaw 安装角。2026-09-27 前后/左右原始流量复核得到约 54°。 */
+#define POSITION_CONTROL_COS_YAW 0.5878f
+#define POSITION_CONTROL_SIN_YAW 0.8090f
 
 /* 位置环每两帧更新一次：25Hz 光流下约 12.5Hz，避开约 80ms 的测量滞后。 */
 #define POSITION_CONTROL_OUTER_DIVIDER 2U
-/* 外环：position[count] -> velocity setpoint[count/s]。 */
-#define POSITION_CONTROL_POSITION_KP_S_INV 0.50f
 #define POSITION_CONTROL_VELOCITY_SP_LIMIT_CPS 200.0f
-/* 内环：velocity error[count/s] -> desired attitude[deg]。 */
-#define POSITION_CONTROL_VELOCITY_KP_DEG_PER_CPS 0.010f
-#define POSITION_CONTROL_ANGLE_LIMIT_DEG 3.0f
+#define POSITION_CONTROL_ANGLE_LIMIT_DEG 8.0f
 /* 一阶低通：fc=2.5Hz，tau=1/(2*pi*fc)。不调用 libm。 */
 #define POSITION_CONTROL_FILTER_TAU_S 0.063662f
 #define POSITION_CONTROL_RECENTER_FRAMES 5U /* 25Hz × 200ms */
@@ -42,6 +44,14 @@ static bool position_latched;
 static uint8_t position_recenter_frames;
 static float position_anchor_x;
 static float position_anchor_y;
+static float position_integral_forward;
+static float position_integral_right;
+static float velocity_integral_forward;
+static float velocity_integral_right;
+static float velocity_forward_error_prev;
+static float velocity_right_error_prev;
+static float velocity_forward_derivative;
+static float velocity_right_derivative;
 
 static float PositionControl_Clamp(float value, float lower, float upper)
 {
@@ -60,6 +70,14 @@ static void PositionControl_ResetOutput(void)
     position_snapshot.raw_pitch_deg = 0.0f;
     position_snapshot.roll_deg = 0.0f;
     position_snapshot.pitch_deg = 0.0f;
+    position_integral_forward = 0.0f;
+    position_integral_right = 0.0f;
+    velocity_integral_forward = 0.0f;
+    velocity_integral_right = 0.0f;
+    velocity_forward_error_prev = 0.0f;
+    velocity_right_error_prev = 0.0f;
+    velocity_forward_derivative = 0.0f;
+    velocity_right_derivative = 0.0f;
 }
 
 static void PositionControl_LatchOff(void)
@@ -192,6 +210,15 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
     float alpha;
     float velocity_forward_error;
     float velocity_right_error;
+    float position_kp;
+    float position_ki;
+    float position_kd;
+    float velocity_kp;
+    float velocity_ki;
+    float velocity_kd;
+    float derivative_alpha;
+    float velocity_forward_derivative_raw;
+    float velocity_right_derivative_raw;
 
     if (dt_s <= 0.0f) return;
 
@@ -335,17 +362,29 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
     position_snapshot.velocity_right_cps = rotated_velocity_right;
     position_snapshot.velocity_update_count++;
 
+    PidTable_GetPositionParams(&position_kp, &position_ki, &position_kd);
+    PidTable_GetVelocityParams(&velocity_kp, &velocity_ki, &velocity_kd);
+    position_integral_forward += position_snapshot.position_forward_counts * dt_s;
+    position_integral_right += position_snapshot.position_right_counts * dt_s;
+    position_integral_forward = PositionControl_Clamp(position_integral_forward, -400.0f, 400.0f);
+    position_integral_right = PositionControl_Clamp(position_integral_right, -400.0f, 400.0f);
+
     position_outer_divider++;
     if (position_outer_divider >= POSITION_CONTROL_OUTER_DIVIDER)
     {
         position_outer_divider = 0U;
-        /* 目标恒为原点：偏前为正时给负速度目标，要求它向后回来。 */
+        /* 目标恒为原点：偏前为正时给负速度目标，要求它向后回来。
+           D 项使用位置误差的导数 -velocity，避免给静止噪声额外积分。 */
         position_snapshot.velocity_forward_sp_cps = PositionControl_Clamp(
-            -POSITION_CONTROL_POSITION_KP_S_INV * position_snapshot.position_forward_counts,
+            (-position_kp * position_snapshot.position_forward_counts) -
+                (position_ki * position_integral_forward) -
+                (position_kd * position_snapshot.velocity_forward_cps),
             -POSITION_CONTROL_VELOCITY_SP_LIMIT_CPS,
             POSITION_CONTROL_VELOCITY_SP_LIMIT_CPS);
         position_snapshot.velocity_right_sp_cps = PositionControl_Clamp(
-            -POSITION_CONTROL_POSITION_KP_S_INV * position_snapshot.position_right_counts,
+            (-position_kp * position_snapshot.position_right_counts) -
+                (position_ki * position_integral_right) -
+                (position_kd * position_snapshot.velocity_right_cps),
             -POSITION_CONTROL_VELOCITY_SP_LIMIT_CPS,
             POSITION_CONTROL_VELOCITY_SP_LIMIT_CPS);
         position_snapshot.position_update_count++;
@@ -354,13 +393,26 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
     velocity_forward_error = position_snapshot.velocity_forward_sp_cps - position_snapshot.velocity_forward_cps;
     velocity_right_error = position_snapshot.velocity_right_sp_cps - position_snapshot.velocity_right_cps;
 
+    velocity_integral_forward += velocity_forward_error * dt_s;
+    velocity_integral_right += velocity_right_error * dt_s;
+    velocity_integral_forward = PositionControl_Clamp(velocity_integral_forward, -400.0f, 400.0f);
+    velocity_integral_right = PositionControl_Clamp(velocity_integral_right, -400.0f, 400.0f);
+    velocity_forward_derivative_raw = (dt_s > 0.0f) ? ((velocity_forward_error - velocity_forward_error_prev) / dt_s) : 0.0f;
+    velocity_right_derivative_raw = (dt_s > 0.0f) ? ((velocity_right_error - velocity_right_error_prev) / dt_s) : 0.0f;
+    derivative_alpha = dt_s / (0.080f + dt_s);
+    derivative_alpha = PositionControl_Clamp(derivative_alpha, 0.0f, 1.0f);
+    velocity_forward_derivative += derivative_alpha * (velocity_forward_derivative_raw - velocity_forward_derivative);
+    velocity_right_derivative += derivative_alpha * (velocity_right_derivative_raw - velocity_right_derivative);
+    velocity_forward_error_prev = velocity_forward_error;
+    velocity_right_error_prev = velocity_right_error;
+
     /* 前向加速度由 pitch 负（低头）产生；右向加速度由 roll 正（右倾）产生。 */
     position_snapshot.raw_roll_deg = PositionControl_Clamp(
-        POSITION_CONTROL_VELOCITY_KP_DEG_PER_CPS * velocity_right_error,
+        velocity_kp * velocity_right_error + velocity_ki * velocity_integral_right + velocity_kd * velocity_right_derivative,
         -POSITION_CONTROL_ANGLE_LIMIT_DEG,
         POSITION_CONTROL_ANGLE_LIMIT_DEG);
     position_snapshot.raw_pitch_deg = PositionControl_Clamp(
-        -POSITION_CONTROL_VELOCITY_KP_DEG_PER_CPS * velocity_forward_error,
+        -(velocity_kp * velocity_forward_error + velocity_ki * velocity_integral_forward + velocity_kd * velocity_forward_derivative),
         -POSITION_CONTROL_ANGLE_LIMIT_DEG,
         POSITION_CONTROL_ANGLE_LIMIT_DEG);
 

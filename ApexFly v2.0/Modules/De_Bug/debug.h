@@ -5,10 +5,10 @@
  * 本模块使用 USART3（PC10 发送，PC11 接收，波特率 115200），与老工程一致。
  * USART2 留给 GPS，不要用来输出日志或波形。
  *
- * 当前 USART3 用于两类文本：
- * - 磁力计 [MAG] 原始值和粗航向
+ * 当前 USART3 用于三类文本：
+ * - 姿态 [ATT] 低频观测行
+ * - 故障、参数和校准结果
  * - 黑匣子 dump / dumpall 的 CSV 和进度
- * [ATT] / [GPS] / [GPS_TIME] 先关掉，测完磁力计再打开。
  * VOFA 波形接口保留为空操作，避免和 CSV 混流。
  */
 
@@ -16,6 +16,7 @@
 #define DEBUG_H
 
 #include "main.h"
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -35,6 +36,12 @@ extern "C" {
  * 各个发送接口第一次使用时也会自动完成初始化。
  */
 void Debug_Init(void);
+
+/** @brief 发布最近一拍姿态，供低优先级任务打印，不执行串口发送。 */
+void Debug_SetAttitudeSnapshot(float roll_deg, float pitch_deg, float yaw_deg);
+
+/** @brief 读取最近一拍姿态；尚未收到有效姿态时返回 false。 */
+bool Debug_GetAttitudeSnapshot(float *roll_deg, float *pitch_deg, float *yaw_deg);
 
 /**
  * @brief 仅供姿态调试任务输出机体系三角。

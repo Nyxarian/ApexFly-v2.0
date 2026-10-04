@@ -3,8 +3,8 @@
  * @brief 飞机端黑匣子：PID 双备份、解锁后场次日志、串口按场次导出 CSV。
  *
  * 只有本模块的任务碰 SPI3 / W25Q64。电机任务只 SubmitSample，电台任务只 RequestSave。
- * 不搬老 app_blackbox，不写水平零点。0x002000 给磁力计硬铁校准双备份，不再给六面校准。
- * 日志按 Session 切开，每场开头钉死旧 26 项姿态参数和新增高度参数。
+ * 不搬老 app_blackbox，不写水平零点。0x002000 给磁力计硬铁校准双备份，末尾保留扇区给 IMU 六面校准双槽。
+ * 日志按 Session 切开，每场开头钉死旧 26 项姿态参数和新增高度参数；每次成功 SET/LOAD 另记完整 39 项参数版本。
  * 样本里 mag_heading_cdeg 记磁航向（百分之一度），CSV 列名为 mag_hdg。
  * 样本里 vz_target_cms 记目标垂速（厘米每秒），CSV 列名为 vz_target_cms；
  * 这一格原来是"本拍最高油门"（每拍重复的常数，无信息量），记录布局与偏移完全没变。
@@ -23,6 +23,12 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define BLACKBOX_PID_REVISION_OPERATION_SET 1U
+#define BLACKBOX_PID_REVISION_OPERATION_LOAD_SAVED 2U
+#define BLACKBOX_PID_REVISION_OPERATION_LOAD_DEFAULTS 3U
+#define BLACKBOX_PID_REVISION_OPERATION_SAVE 4U
+#define BLACKBOX_PID_REVISION_BATCH_PARAMETER_ID 0xFFU
 
 /**
  * @brief 一拍控制样本。电机任务在 100Hz 环里填，黑匣子任务写入 Flash。
@@ -140,6 +146,14 @@ bool Blackbox_IsDumping(void);
  * @return 已入队返回 true；未就绪或上一次还在写返回 false。
  */
 bool Blackbox_RequestSave(void);
+
+/**
+ * @brief 记录一次成功的参数版本变更，不要求先 SAVE。
+ * @param operation 1=SET，2=LOAD_SAVED，3=LOAD_DEFAULTS。
+ * @param parameter_id 变更参数编号；批量操作使用 0xFF。
+ * @param values_q10000 变更完成后的完整 39 项参数快照。
+ */
+bool Blackbox_RequestPidRevision(uint8_t operation, uint8_t parameter_id, const int32_t *values_q10000);
 
 /**
  * @brief 把当前磁力计硬铁偏移排队写入 0x002000 双备份。电台任务调用，本函数不擦 Flash。

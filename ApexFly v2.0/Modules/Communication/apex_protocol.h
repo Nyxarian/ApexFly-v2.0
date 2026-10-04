@@ -31,7 +31,7 @@ extern "C" {
       但它是**请求触发的一次性报文**（进 PID 页 GET / 改参 SET / SAVE），
       不是周期流量 ⇒ **不影响遥测帧与控制帧**，飞行中的链路余量不变。
    ⚠️ 这一项是两端共用的常量（遥控端 apex_protocol.h 必须同值），改了两端都要重烧。 */
-#define APEX_PROTOCOL_MAX_PAYLOAD_LENGTH 140U
+#define APEX_PROTOCOL_MAX_PAYLOAD_LENGTH 180U
 #define APEX_PROTOCOL_MAX_FRAME_LENGTH (9U + APEX_PROTOCOL_MAX_PAYLOAD_LENGTH)
 #define APEX_PROTOCOL_CONTROL_PAYLOAD_LENGTH 10U
 #define APEX_PROTOCOL_TELEMETRY_PAYLOAD_LENGTH 31U
@@ -40,11 +40,12 @@ extern "C" {
 #define APEX_PID_V5_PARAMETER_COUNT 21U
 #define APEX_PID_V6_PARAMETER_COUNT 26U
 #define APEX_PID_V7_PARAMETER_COUNT 30U
-#define APEX_PID_PARAMETER_COUNT 33U
+#define APEX_PID_V8_PARAMETER_COUNT 39U
+#define APEX_PID_PARAMETER_COUNT APEX_PID_V8_PARAMETER_COUNT
 #define APEX_PROTOCOL_PID_RESPONSE_PAYLOAD_LENGTH (4U + (APEX_PID_PARAMETER_COUNT * 4U))
 #define APEX_PID_VALUE_SCALE 10000L
 
-/* PID 回包包含序号、状态、操作类型、参数版本及全部 33 个参数；负载上限不足时必须在编译期报错，避免遥控器永久等待确认。 */
+/* PID 回包包含序号、状态、操作类型、参数版本及全部 39 个参数。 */
 #if (APEX_PROTOCOL_PID_RESPONSE_PAYLOAD_LENGTH > APEX_PROTOCOL_MAX_PAYLOAD_LENGTH)
 #error "APEX_PROTOCOL_MAX_PAYLOAD_LENGTH is too small for the PID response."
 #endif
@@ -166,7 +167,15 @@ typedef enum
        可存 Flash、可进黑匣子场次头"的参数，**不参与任何控制**（改它们不会影响飞行）。 */
     APEX_PID_HEIGHT_KP,
     APEX_PID_HEIGHT_KI,
-    APEX_PID_HEIGHT_KD
+    APEX_PID_HEIGHT_KD,
+    /* 定点位置环：位置误差（count）→ 目标速度（count/s）。 */
+    APEX_PID_POSITION_KP,
+    APEX_PID_POSITION_KI,
+    APEX_PID_POSITION_KD,
+    /* 定点速度环：速度误差（count/s）→ 姿态修正角（deg）。 */
+    APEX_PID_VELOCITY_KP,
+    APEX_PID_VELOCITY_KI,
+    APEX_PID_VELOCITY_KD
 } ApexPidParameterId_t;
 
 typedef enum
