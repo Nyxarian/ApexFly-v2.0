@@ -32,6 +32,14 @@
 #define IMU_ATTITUDE_INTEGRAL_LIMIT_RAD_S 0.20f
 #define IMU_ATTITUDE_QUATERNION_NORM_MIN 0.000001f
 #define IMU_ATTITUDE_FINITE_ABS_LIMIT 1000000.0f
+#define IMU_ATTITUDE_STATIONARY_GYRO_MAX_DPS 2.0f
+#define IMU_ATTITUDE_STATIONARY_GYRO_JUMP_MAX_DPS 1.0f
+#define IMU_ATTITUDE_STATIONARY_SAMPLE_COUNT 100U
+#define IMU_ATTITUDE_ACCEL_NORM_WEIGHT_FULL_MIN_G 0.98f
+#define IMU_ATTITUDE_ACCEL_NORM_WEIGHT_FULL_MAX_G 1.05f
+#define IMU_ATTITUDE_ACCEL_ERROR_WEIGHT_FULL 0.02f
+#define IMU_ATTITUDE_ACCEL_ERROR_WEIGHT_ZERO 0.10f
+#define IMU_ATTITUDE_ACCEL_WEIGHT_SLEW_ALPHA 0.20f
 /* 阶段 2A：机架确认水平后测得的固定姿态偏置。
    约定为 corrected = raw + trim；不随每次上电重新采样。后续再迁移到持久化校准参数。 */
 #define IMU_ATTITUDE_MOUNT_ROLL_TRIM_DEG  (-0.14f)
@@ -47,6 +55,25 @@ static float IMU_Attitude_Clamp(float value, float minimum, float maximum)
     if (value < minimum) return minimum;
     if (value > maximum) return maximum;
     return value;
+}
+
+static float IMU_Attitude_AccelWeight(float accel_norm_g, float error_norm, bool valid)
+{
+    float norm_weight;
+    float error_weight;
+
+    if (!valid) return 0.0f;
+    if (accel_norm_g < IMU_ATTITUDE_ACCEL_NORM_MIN_G || accel_norm_g > IMU_ATTITUDE_ACCEL_NORM_MAX_G) norm_weight = 0.0f;
+    else if (accel_norm_g < IMU_ATTITUDE_ACCEL_NORM_WEIGHT_FULL_MIN_G)
+        norm_weight = (accel_norm_g - IMU_ATTITUDE_ACCEL_NORM_MIN_G) / (IMU_ATTITUDE_ACCEL_NORM_WEIGHT_FULL_MIN_G - IMU_ATTITUDE_ACCEL_NORM_MIN_G);
+    else if (accel_norm_g > IMU_ATTITUDE_ACCEL_NORM_WEIGHT_FULL_MAX_G)
+        norm_weight = (IMU_ATTITUDE_ACCEL_NORM_MAX_G - accel_norm_g) / (IMU_ATTITUDE_ACCEL_NORM_MAX_G - IMU_ATTITUDE_ACCEL_NORM_WEIGHT_FULL_MAX_G);
+    else norm_weight = 1.0f;
+
+    if (error_norm <= IMU_ATTITUDE_ACCEL_ERROR_WEIGHT_FULL) error_weight = 1.0f;
+    else if (error_norm >= IMU_ATTITUDE_ACCEL_ERROR_WEIGHT_ZERO) error_weight = 0.0f;
+    else error_weight = (IMU_ATTITUDE_ACCEL_ERROR_WEIGHT_ZERO - error_norm) / (IMU_ATTITUDE_ACCEL_ERROR_WEIGHT_ZERO - IMU_ATTITUDE_ACCEL_ERROR_WEIGHT_FULL);
+    return IMU_Attitude_Clamp((norm_weight < error_weight) ? norm_weight : error_weight, 0.0f, 1.0f);
 }
 
 static float IMU_Attitude_NormalizeAngle(float angle_deg)
@@ -172,6 +199,14 @@ bool IMU_Attitude_Update(IMU_Attitude_t *attitude, const MPU6050_Data_t *data, f
     float q3_new;
     float roll_rad;
     float pitch_rad;
+    float gyro_jump_max;
+    float gyro_abs_max;
+    bool stationary_candidate;
+    float raw_error_norm;
+    float target_accel_weight;
+    float weighted_error_x;
+    float weighted_error_y;
+    float weighted_error_z;
 
     if ((attitude == NULL) || (data == NULL)) return false;
     /* dt 异常时不再放弃本拍，而是用限幅值继续积分：
@@ -198,6 +233,35 @@ bool IMU_Attitude_Update(IMU_Attitude_t *attitude, const MPU6050_Data_t *data, f
 
     attitude->accel_correction_valid = IMU_Attitude_GetAccelUnit(attitude->accel_x_lpf, attitude->accel_y_lpf, attitude->accel_z_lpf, &ax, &ay, &az, &accel_norm_g);
     attitude->accel_norm_g = accel_norm_g;
+    if (!attitude->accel_correction_valid) attitude->accel_health_state = 3U;
+    else if ((accel_norm_g < 0.98f) || (accel_norm_g > 1.05f)) attitude->accel_health_state = 2U;
+    else attitude->accel_health_state = 1U;
+    gyro_abs_max = IMU_Attitude_Clamp(IMU_Attitude_Clamp(fabsf(data->gyro_x_dps), 0.0f, 1000000.0f), 0.0f, 1000000.0f);
+    if (fabsf(data->gyro_y_dps) > gyro_abs_max) gyro_abs_max = fabsf(data->gyro_y_dps);
+    if (fabsf(data->gyro_z_dps) > gyro_abs_max) gyro_abs_max = fabsf(data->gyro_z_dps);
+    gyro_jump_max = 0.0f;
+    if (attitude->health_gyro_history_valid)
+    {
+        gyro_jump_max = fabsf(data->gyro_x_dps - attitude->health_last_gyro_x_dps);
+        if (fabsf(data->gyro_y_dps - attitude->health_last_gyro_y_dps) > gyro_jump_max) gyro_jump_max = fabsf(data->gyro_y_dps - attitude->health_last_gyro_y_dps);
+        if (fabsf(data->gyro_z_dps - attitude->health_last_gyro_z_dps) > gyro_jump_max) gyro_jump_max = fabsf(data->gyro_z_dps - attitude->health_last_gyro_z_dps);
+    }
+    stationary_candidate = attitude->accel_correction_valid &&
+                           (gyro_abs_max <= IMU_ATTITUDE_STATIONARY_GYRO_MAX_DPS) &&
+                           (!attitude->health_gyro_history_valid || (gyro_jump_max <= IMU_ATTITUDE_STATIONARY_GYRO_JUMP_MAX_DPS));
+    attitude->health_last_gyro_x_dps = data->gyro_x_dps;
+    attitude->health_last_gyro_y_dps = data->gyro_y_dps;
+    attitude->health_last_gyro_z_dps = data->gyro_z_dps;
+    attitude->health_gyro_history_valid = true;
+    if (stationary_candidate)
+    {
+        if (attitude->stationary_sample_count < IMU_ATTITUDE_STATIONARY_SAMPLE_COUNT) attitude->stationary_sample_count++;
+    }
+    else
+    {
+        attitude->stationary_sample_count = 0U;
+    }
+    attitude->stationary = attitude->stationary_sample_count >= IMU_ATTITUDE_STATIONARY_SAMPLE_COUNT;
     if (!attitude->initialized)
     {
         if (!attitude->accel_correction_valid) return false;
@@ -207,6 +271,8 @@ bool IMU_Attitude_Update(IMU_Attitude_t *attitude, const MPU6050_Data_t *data, f
         attitude->fusion_error_x = 0.0f;
         attitude->fusion_error_y = 0.0f;
         attitude->fusion_error_z = 0.0f;
+        attitude->fusion_error_norm = 0.0f;
+        attitude->accel_correction_weight = attitude->accel_correction_valid ? 1.0f : 0.0f;
         attitude->initialized = true;
         return true;
     }
@@ -218,20 +284,27 @@ bool IMU_Attitude_Update(IMU_Attitude_t *attitude, const MPU6050_Data_t *data, f
         error_x = ay * gravity_z - az * gravity_y;
         error_y = az * gravity_x - ax * gravity_z;
         error_z = ax * gravity_y - ay * gravity_x;
+        raw_error_norm = sqrtf((error_x * error_x) + (error_y * error_y) + (error_z * error_z));
+        target_accel_weight = IMU_Attitude_AccelWeight(accel_norm_g, raw_error_norm, true);
+        attitude->accel_correction_weight += IMU_ATTITUDE_ACCEL_WEIGHT_SLEW_ALPHA * (target_accel_weight - attitude->accel_correction_weight);
+        weighted_error_x = error_x * attitude->accel_correction_weight;
+        weighted_error_y = error_y * attitude->accel_correction_weight;
+        weighted_error_z = error_z * attitude->accel_correction_weight;
         attitude->fusion_error_x = error_x;
         attitude->fusion_error_y = error_y;
         attitude->fusion_error_z = error_z;
+        attitude->fusion_error_norm = raw_error_norm;
 
-        attitude->integral_x += IMU_ATTITUDE_MAHONY_KI * error_x * delta_time_s;
-        attitude->integral_y += IMU_ATTITUDE_MAHONY_KI * error_y * delta_time_s;
-        attitude->integral_z += IMU_ATTITUDE_MAHONY_KI * error_z * delta_time_s;
+        attitude->integral_x += IMU_ATTITUDE_MAHONY_KI * weighted_error_x * delta_time_s;
+        attitude->integral_y += IMU_ATTITUDE_MAHONY_KI * weighted_error_y * delta_time_s;
+        attitude->integral_z += IMU_ATTITUDE_MAHONY_KI * weighted_error_z * delta_time_s;
         attitude->integral_x = IMU_Attitude_Clamp(attitude->integral_x, -IMU_ATTITUDE_INTEGRAL_LIMIT_RAD_S, IMU_ATTITUDE_INTEGRAL_LIMIT_RAD_S);
         attitude->integral_y = IMU_Attitude_Clamp(attitude->integral_y, -IMU_ATTITUDE_INTEGRAL_LIMIT_RAD_S, IMU_ATTITUDE_INTEGRAL_LIMIT_RAD_S);
         attitude->integral_z = IMU_Attitude_Clamp(attitude->integral_z, -IMU_ATTITUDE_INTEGRAL_LIMIT_RAD_S, IMU_ATTITUDE_INTEGRAL_LIMIT_RAD_S);
 
-        gyro_x = data->gyro_x_dps * IMU_ATTITUDE_DEG_TO_RAD + IMU_ATTITUDE_MAHONY_KP * error_x + attitude->integral_x;
-        gyro_y = data->gyro_y_dps * IMU_ATTITUDE_DEG_TO_RAD + IMU_ATTITUDE_MAHONY_KP * error_y + attitude->integral_y;
-        gyro_z = data->gyro_z_dps * IMU_ATTITUDE_DEG_TO_RAD + IMU_ATTITUDE_MAHONY_KP * error_z + attitude->integral_z;
+        gyro_x = data->gyro_x_dps * IMU_ATTITUDE_DEG_TO_RAD + IMU_ATTITUDE_MAHONY_KP * weighted_error_x + attitude->integral_x;
+        gyro_y = data->gyro_y_dps * IMU_ATTITUDE_DEG_TO_RAD + IMU_ATTITUDE_MAHONY_KP * weighted_error_y + attitude->integral_y;
+        gyro_z = data->gyro_z_dps * IMU_ATTITUDE_DEG_TO_RAD + IMU_ATTITUDE_MAHONY_KP * weighted_error_z + attitude->integral_z;
     }
     else
     {
@@ -239,6 +312,8 @@ bool IMU_Attitude_Update(IMU_Attitude_t *attitude, const MPU6050_Data_t *data, f
         attitude->fusion_error_x = 0.0f;
         attitude->fusion_error_y = 0.0f;
         attitude->fusion_error_z = 0.0f;
+        attitude->fusion_error_norm = 0.0f;
+        attitude->accel_correction_weight += IMU_ATTITUDE_ACCEL_WEIGHT_SLEW_ALPHA * (0.0f - attitude->accel_correction_weight);
         gyro_x = data->gyro_x_dps * IMU_ATTITUDE_DEG_TO_RAD;
         gyro_y = data->gyro_y_dps * IMU_ATTITUDE_DEG_TO_RAD;
         gyro_z = data->gyro_z_dps * IMU_ATTITUDE_DEG_TO_RAD;
@@ -329,6 +404,17 @@ void IMU_Attitude_GetFusionError(const IMU_Attitude_t *attitude, float *x, float
     if (x != NULL) *x = attitude->fusion_error_x;
     if (y != NULL) *y = attitude->fusion_error_y;
     if (z != NULL) *z = attitude->fusion_error_z;
+}
+
+void IMU_Attitude_GetHealth(const IMU_Attitude_t *attitude, float *accel_norm_g, bool *accel_correction_valid, uint8_t *accel_health_state, bool *stationary, float *fusion_error_norm, float *accel_correction_weight)
+{
+    if (attitude == NULL) return;
+    if (accel_norm_g != NULL) *accel_norm_g = attitude->accel_norm_g;
+    if (accel_correction_valid != NULL) *accel_correction_valid = attitude->accel_correction_valid;
+    if (accel_health_state != NULL) *accel_health_state = attitude->accel_health_state;
+    if (stationary != NULL) *stationary = attitude->stationary;
+    if (fusion_error_norm != NULL) *fusion_error_norm = attitude->fusion_error_norm;
+    if (accel_correction_weight != NULL) *accel_correction_weight = attitude->accel_correction_weight;
 }
 
 void IMU_Attitude_GetQuaternion(const IMU_Attitude_t *attitude, float q[4])

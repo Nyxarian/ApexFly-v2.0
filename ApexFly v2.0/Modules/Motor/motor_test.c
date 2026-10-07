@@ -50,6 +50,7 @@
 #include "tof.h"
 #include "vertical_control.h"
 #include "vertical_est.h"
+#include "flow.h"
 #include <string.h>
 
 #define ESC_ARM_WAIT_MS 3000U
@@ -262,6 +263,7 @@ void MotorTest_Task(void *argument)
     static MPU6050_Device_t imu_device;
     static MPU6050_Data_t imu_data;
     static IMU_GyroBiasCollector_t bias_collector;
+    static IMU_GyroOnlineBias_t online_bias;
     static IMU_Attitude_t attitude;
     static IMU_BodyAttitude_t body;
     static MixerOutput_t mixer_output;
@@ -299,6 +301,9 @@ void MotorTest_Task(void *argument)
     float raw_accel_x_g;
     float raw_accel_y_g;
     float raw_accel_z_g;
+    float residual_gyro_x_dps;
+    float residual_gyro_y_dps;
+    float residual_gyro_z_dps;
 
     (void)argument;
     MotorTest_TimebaseInit();
@@ -343,6 +348,7 @@ void MotorTest_Task(void *argument)
         }
 
         IMU_GyroBias_Start(&bias_collector, IMU_BIAS_SAMPLE_COUNT);
+        IMU_GyroOnlineBias_Init(&online_bias);
         IMU_Attitude_Init(&attitude);
         AttitudeControl_Reset();
         /* 高度/垂速估计器跟着一起重新起步：IMU 重新初始化后姿态角会跳，
@@ -350,7 +356,7 @@ void MotorTest_Task(void *argument)
         VerticalEst_Init();
         /* 定高的模式状态机也跟着冷复位：模式回普通、h_sp 归零、停手计时清零。 */
         VerticalControl_Init();
-        PositionControl_SetSafetyContext(false, false, false);
+        PositionControl_SetSafetyContext(false, false, false, false);
         bias_ready = false;
         was_armed = false;
         last_imu_cycles = 0U;
@@ -387,7 +393,7 @@ void MotorTest_Task(void *argument)
                 {
                     continue;
                 }
-                PositionControl_SetSafetyContext(false, false, false);
+                PositionControl_SetSafetyContext(false, false, false, false);
                 if (was_armed) Blackbox_NotifyDisarmed();
                 Motor_Disarm();
                 Radio_PublishFlightState(0.0f, 0.0f, 0.0f, MOTOR_PWM_MIN_US, 0, 0, false, true, false);
@@ -415,6 +421,10 @@ void MotorTest_Task(void *argument)
                并把 dt 统计弄脏。需要观察姿态数据时看黑匣子样本，
                或在本文件外临时挂调试代码，验证完立即删除。 */
             IMU_GyroBias_Apply(&bias_collector.bias, &imu_data);
+            residual_gyro_x_dps = imu_data.gyro_x_dps;
+            residual_gyro_y_dps = imu_data.gyro_y_dps;
+            residual_gyro_z_dps = imu_data.gyro_z_dps;
+            IMU_GyroOnlineBias_Apply(&online_bias, &imu_data);
             raw_accel_x_g = imu_data.accel_x_g;
             raw_accel_y_g = imu_data.accel_y_g;
             raw_accel_z_g = imu_data.accel_z_g;
@@ -424,8 +434,24 @@ void MotorTest_Task(void *argument)
                 continue;
             }
             IMU_Attitude_MapToBody(&attitude, &imu_data, &body);
+            Flow_SetMotionContext(body.roll_rate_dps, body.pitch_rate_dps, body.yaw_rate_dps);
             /* 姿态打印由低优先级 ToF 任务节流发送；控制环这里只发布快照。 */
             Debug_SetAttitudeSnapshot(body.roll_deg, body.pitch_deg, body.yaw_deg);
+            {
+                float accel_norm_g;
+                float fusion_error_norm;
+                bool accel_correction_valid;
+                bool stationary;
+                uint8_t accel_health_state;
+                float accel_correction_weight;
+                float online_bias_x_dps;
+                float online_bias_y_dps;
+                float online_bias_z_dps;
+                bool online_bias_learning;
+                IMU_Attitude_GetHealth(&attitude, &accel_norm_g, &accel_correction_valid, &accel_health_state, &stationary, &fusion_error_norm, &accel_correction_weight);
+                IMU_GyroOnlineBias_Get(&online_bias, &online_bias_x_dps, &online_bias_y_dps, &online_bias_z_dps, &online_bias_learning);
+                Debug_SetAttitudeHealthSnapshot(accel_norm_g, accel_correction_valid, accel_health_state, stationary, fusion_error_norm, accel_correction_weight, online_bias_x_dps, online_bias_y_dps, online_bias_z_dps, online_bias_learning);
+            }
 
             /* 高度直接读 ToF 任务算好的结果：只做一次 32 位整数读取，
                不碰 I2C2 锁，绝不会拖慢 250Hz 控制环。
@@ -451,7 +477,17 @@ void MotorTest_Task(void *argument)
 
             IMU_AccelCalibration_ProcessSample(!armed,
                                                raw_accel_x_g, raw_accel_y_g, raw_accel_z_g,
-                                               imu_data.gyro_x_dps, imu_data.gyro_y_dps, imu_data.gyro_z_dps);
+                                               residual_gyro_x_dps, residual_gyro_y_dps, residual_gyro_z_dps);
+            {
+                float health_accel_norm_g;
+                float health_fusion_error_norm;
+                float health_accel_weight;
+                bool health_accel_valid;
+                bool health_stationary;
+                uint8_t health_state;
+                IMU_Attitude_GetHealth(&attitude, &health_accel_norm_g, &health_accel_valid, &health_state, &health_stationary, &health_fusion_error_norm, &health_accel_weight);
+                (void)IMU_GyroOnlineBias_Update(&online_bias, !armed, health_stationary, health_state == 1U, health_accel_weight, residual_gyro_x_dps, residual_gyro_y_dps, residual_gyro_z_dps, control_dt_s);
+            }
 
             /* 内环（角速度环）未启用时拒绝解锁：此时姿态环没有阻尼，起飞必然发散。 */
             if (armed && !AttitudeControl_IsInnerLoopEnabled())
@@ -468,6 +504,7 @@ void MotorTest_Task(void *argument)
                "空中失联"误判成"在地面上"。 */
             VerticalControl_Update(link.command.flight_mode, link.command.throttle, (link.connected && link.command_valid), armed, body.roll_deg, body.pitch_deg, control_dt_s);
             VerticalControl_GetSnapshot(&vertical_control_state);
+            PositionControl_SetHeightContext(vertical_control_state.est_valid, vertical_control_state.h_est_cm);
 
             position_control_permission = armed && AttitudeControl_IsInnerLoopEnabled();
             position_attitude_safe = (MotorTest_Absf(body.roll_deg) < VERTICAL_CONTROL_MAX_TILT_DEG) &&
@@ -476,7 +513,9 @@ void MotorTest_Task(void *argument)
                                    (vertical_control_state.h_est_cm <= VERTICAL_MODE_MAX_HEIGHT_CM);
             PositionControl_SetSafetyContext(position_control_permission,
                                              position_attitude_safe,
-                                             position_height_safe);
+                                             position_height_safe,
+                                             link.connected && link.command_valid &&
+                                                 ((link.command.flags & APEX_CONTROL_FLAG_ARM_REQUESTED) == 0U));
             PositionControl_GetSnapshot(&position_control_state);
 
             if (!armed)

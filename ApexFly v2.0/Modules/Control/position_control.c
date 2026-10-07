@@ -27,6 +27,9 @@
 /* 一阶低通：fc=2.5Hz，tau=1/(2*pi*fc)。不调用 libm。 */
 #define POSITION_CONTROL_FILTER_TAU_S 0.063662f
 #define POSITION_CONTROL_RECENTER_FRAMES 5U /* 25Hz × 200ms */
+#define POSITION_CONTROL_REFERENCE_HEIGHT_CM 14.0f
+#define POSITION_CONTROL_HEIGHT_SCALE_MIN 0.60f
+#define POSITION_CONTROL_HEIGHT_SCALE_MAX 2.00f
 /* OF10 接入后请求来自控制帧；上电默认关闭，避免遥控器尚未明确请求时进入定点。 */
 #define POSITION_CONTROL_DIAGNOSTIC_REQUEST_DEFAULT false
 
@@ -39,6 +42,7 @@ static volatile bool position_control_permission;
 static volatile bool position_attitude_safe;
 static volatile bool position_height_safe;
 static volatile bool position_safety_context_valid;
+static volatile bool position_pilot_disarmed;
 static bool position_flow_available;
 static bool position_latched;
 static uint8_t position_recenter_frames;
@@ -52,12 +56,25 @@ static float velocity_forward_error_prev;
 static float velocity_right_error_prev;
 static float velocity_forward_derivative;
 static float velocity_right_derivative;
+static volatile bool position_height_context_valid;
+static volatile float position_height_cm;
+static volatile bool position_motion_suppressed;
+static bool position_reanchor_after_motion;
 
 static float PositionControl_Clamp(float value, float lower, float upper)
 {
     if (value > upper) return upper;
     if (value < lower) return lower;
     return value;
+}
+
+static float PositionControl_GetHeightScale(void)
+{
+    float scale;
+
+    if (!position_height_context_valid || (position_height_cm <= 0.0f)) return 1.0f;
+    scale = position_height_cm / POSITION_CONTROL_REFERENCE_HEIGHT_CM;
+    return PositionControl_Clamp(scale, POSITION_CONTROL_HEIGHT_SCALE_MIN, POSITION_CONTROL_HEIGHT_SCALE_MAX);
 }
 
 static void PositionControl_ResetOutput(void)
@@ -70,6 +87,8 @@ static void PositionControl_ResetOutput(void)
     position_snapshot.raw_pitch_deg = 0.0f;
     position_snapshot.roll_deg = 0.0f;
     position_snapshot.pitch_deg = 0.0f;
+    position_snapshot.height_scale = 1.0f;
+    position_snapshot.motion_suppressed = false;
     position_integral_forward = 0.0f;
     position_integral_right = 0.0f;
     velocity_integral_forward = 0.0f;
@@ -88,6 +107,27 @@ static void PositionControl_LatchOff(void)
     PositionControl_ResetOutput();
 }
 
+static bool PositionControl_WaitForPilotDisarm(void)
+{
+    /* 只处理正常上锁，已经锁存的真实故障仍需关闭、重开定点请求。 */
+    if (!position_pilot_disarmed || !position_request || position_latched) return false;
+
+    position_snapshot.state = (uint8_t)POSITION_CONTROL_STATE_WAITING;
+    position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_NONE;
+    position_recenter_frames = 0U;
+    position_reanchor_after_motion = false;
+    position_anchor_x = 0.0f;
+    position_anchor_y = 0.0f;
+    position_snapshot.anchor_x_counts = 0.0f;
+    position_snapshot.anchor_y_counts = 0.0f;
+    position_snapshot.position_forward_counts = 0.0f;
+    position_snapshot.position_right_counts = 0.0f;
+    position_snapshot.velocity_forward_cps = 0.0f;
+    position_snapshot.velocity_right_cps = 0.0f;
+    PositionControl_ResetOutput();
+    return true;
+}
+
 static void PositionControl_LatchOffWithReason(uint8_t reason)
 {
     position_snapshot.fault_reason = reason;
@@ -102,7 +142,7 @@ static uint8_t PositionControl_GetGateMask(void)
     if (position_link_ok) mask |= POSITION_CONTROL_GATE_LINK;
     if (position_flow_available) mask |= POSITION_CONTROL_GATE_FLOW;
     if (position_sticks_centered) mask |= POSITION_CONTROL_GATE_STICKS;
-    if (position_safety_context_valid && position_control_permission &&
+    if (position_safety_context_valid && position_control_permission && !position_pilot_disarmed &&
         position_attitude_safe && position_height_safe)
     {
         mask |= POSITION_CONTROL_GATE_PERMISSION;
@@ -145,11 +185,16 @@ void PositionControl_Init(void)
     position_attitude_safe = false;
     position_height_safe = false;
     position_safety_context_valid = false;
+    position_pilot_disarmed = false;
     position_flow_available = false;
     position_latched = false;
     position_recenter_frames = 0U;
     position_anchor_x = 0.0f;
     position_anchor_y = 0.0f;
+    position_height_context_valid = false;
+    position_height_cm = POSITION_CONTROL_REFERENCE_HEIGHT_CM;
+    position_motion_suppressed = false;
+    position_reanchor_after_motion = false;
 
     position_snapshot.valid = false;
     position_snapshot.request = position_request;
@@ -191,12 +236,36 @@ void PositionControl_SetPilotContext(bool link_ok, bool sticks_centered)
     position_snapshot.gate_mask = PositionControl_GetGateMask();
 }
 
-void PositionControl_SetSafetyContext(bool control_permission, bool attitude_safe, bool height_safe)
+void PositionControl_SetSafetyContext(bool control_permission, bool attitude_safe, bool height_safe, bool pilot_disarmed)
 {
     position_control_permission = control_permission;
     position_attitude_safe = attitude_safe;
     position_height_safe = height_safe;
+    position_pilot_disarmed = pilot_disarmed;
     position_safety_context_valid = true;
+}
+
+void PositionControl_SetHeightContext(bool valid, float height_cm)
+{
+    position_height_context_valid = valid && (height_cm > 0.0f);
+    if (height_cm > 0.0f) position_height_cm = height_cm;
+}
+
+void PositionControl_SetMotionSuppressed(bool suppressed)
+{
+    if (suppressed)
+    {
+        if (!position_motion_suppressed) PositionControl_ResetOutput();
+        position_motion_suppressed = true;
+        position_snapshot.motion_suppressed = true;
+        return;
+    }
+    if (position_motion_suppressed)
+    {
+        position_motion_suppressed = false;
+        position_reanchor_after_motion = true;
+    }
+    position_snapshot.motion_suppressed = false;
 }
 
 void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps, float dt_s)
@@ -219,14 +288,31 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
     float derivative_alpha;
     float velocity_forward_derivative_raw;
     float velocity_right_derivative_raw;
+    float height_scale;
 
     if (dt_s <= 0.0f) return;
+    if (PositionControl_WaitForPilotDisarm()) return;
+
+    height_scale = PositionControl_GetHeightScale();
+    position_snapshot.height_scale = height_scale;
+
+    if (position_motion_suppressed)
+    {
+        PositionControl_ResetOutput();
+        position_snapshot.motion_suppressed = true;
+        return;
+    }
 
     /* 模块坐标 -> 机体系。位置与速度必须使用同一旋转，不能各写一套符号。 */
     rotated_position_forward = (POSITION_CONTROL_COS_YAW * sum_x) + (POSITION_CONTROL_SIN_YAW * sum_y);
     rotated_position_right = (-POSITION_CONTROL_SIN_YAW * sum_x) + (POSITION_CONTROL_COS_YAW * sum_y);
     rotated_velocity_forward = (POSITION_CONTROL_COS_YAW * vx_cps) + (POSITION_CONTROL_SIN_YAW * vy_cps);
     rotated_velocity_right = (-POSITION_CONTROL_SIN_YAW * vx_cps) + (POSITION_CONTROL_COS_YAW * vy_cps);
+    /* 光流计数与 1/高度成正比；统一换算到参考高度量纲后再进两级环。 */
+    rotated_position_forward *= height_scale;
+    rotated_position_right *= height_scale;
+    rotated_velocity_forward *= height_scale;
+    rotated_velocity_right *= height_scale;
 
     gate_mask = PositionControl_GetGateMask();
     position_snapshot.request = position_request;
@@ -344,6 +430,17 @@ void PositionControl_Update(float sum_x, float sum_y, float vx_cps, float vy_cps
         return;
     }
 
+    if (position_reanchor_after_motion)
+    {
+        position_anchor_x = rotated_position_forward;
+        position_anchor_y = rotated_position_right;
+        position_snapshot.anchor_x_counts = position_anchor_x;
+        position_snapshot.anchor_y_counts = position_anchor_y;
+        position_reanchor_after_motion = false;
+        PositionControl_ResetOutput();
+        return;
+    }
+
     if (position_snapshot.state != (uint8_t)POSITION_CONTROL_STATE_ACTIVE)
     {
         /* 无扰切入：当前位置就是新的定点原点，旧累计量不带入。 */
@@ -427,12 +524,14 @@ void PositionControl_SetFlowAvailable(bool available)
 {
     position_flow_available = available;
     position_snapshot.gate_mask = PositionControl_GetGateMask();
+    /* Flow 轮询也处理上锁；无需等下一帧光流，旋转冻结或暂时无帧时同样退等待。 */
+    if (PositionControl_WaitForPilotDisarm()) return;
     if (!available && ((position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_ACTIVE) ||
                        (position_snapshot.state == (uint8_t)POSITION_CONTROL_STATE_PILOT_MOVE)))
     {
         PositionControl_LatchOffWithReason((uint8_t)POSITION_CONTROL_FAULT_FLOW);
     }
-    else if (!available && position_request)
+    else if (!available && position_request && !position_latched)
     {
         position_snapshot.fault_reason = (uint8_t)POSITION_CONTROL_FAULT_FLOW;
     }
@@ -447,7 +546,7 @@ void PositionControl_GetSnapshot(PositionControlSnapshot_t *snapshot)
     *snapshot = position_snapshot;
     /* 控制环发布安全状态的频率高于 Flow；在 Flow 下一帧锁存前，
        读取接口也必须先把姿态目标视为无效，避免未来接入姿态环时多用一拍旧输出。 */
-    if (!position_safety_context_valid || !position_control_permission ||
+    if (!position_safety_context_valid || !position_control_permission || position_pilot_disarmed ||
         !position_attitude_safe || !position_height_safe)
     {
         snapshot->valid = false;

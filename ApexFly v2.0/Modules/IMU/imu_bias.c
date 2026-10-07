@@ -14,6 +14,8 @@
 #define IMU_BIAS_ACCEL_NORM_SQ_MAX 1.2100f
 /* 静止门禁：相邻两拍角速度变化上限，单位度每秒。静置噪声实测小于 0.3dps。 */
 #define IMU_BIAS_GYRO_JUMP_MAX_DPS 1.0f
+#define IMU_ONLINE_BIAS_TIME_CONSTANT_S 20.0f
+#define IMU_ONLINE_BIAS_LIMIT_DPS 3.0f
 
 static float IMU_GyroBias_Absf(float value)
 {
@@ -124,4 +126,54 @@ void IMU_GyroBias_Apply(const IMU_GyroBias_t *bias, MPU6050_Data_t *data)
     data->gyro_x_dps -= bias->gyro_x_dps;
     data->gyro_y_dps -= bias->gyro_y_dps;
     data->gyro_z_dps -= bias->gyro_z_dps;
+}
+
+static float IMU_GyroOnlineBias_Clamp(float value, float minimum, float maximum)
+{
+    if (value < minimum) return minimum;
+    if (value > maximum) return maximum;
+    return value;
+}
+
+void IMU_GyroOnlineBias_Init(IMU_GyroOnlineBias_t *online_bias)
+{
+    if (online_bias == NULL) return;
+    memset(online_bias, 0, sizeof(*online_bias));
+}
+
+bool IMU_GyroOnlineBias_Update(IMU_GyroOnlineBias_t *online_bias, bool disarmed, bool stationary, bool accel_health_ok, float accel_weight, float gyro_x_dps, float gyro_y_dps, float gyro_z_dps, float dt_s)
+{
+    float alpha;
+
+    if (online_bias == NULL) return false;
+    if (dt_s < 0.0005f) dt_s = 0.0005f;
+    if (dt_s > 0.030f) dt_s = 0.030f;
+    online_bias->learning_allowed = disarmed && stationary && accel_health_ok && (accel_weight >= 0.95f);
+    if (!online_bias->learning_allowed) return false;
+
+    alpha = dt_s / (IMU_ONLINE_BIAS_TIME_CONSTANT_S + dt_s);
+    online_bias->gyro_x_dps += alpha * (gyro_x_dps - online_bias->gyro_x_dps);
+    online_bias->gyro_y_dps += alpha * (gyro_y_dps - online_bias->gyro_y_dps);
+    online_bias->gyro_z_dps += alpha * (gyro_z_dps - online_bias->gyro_z_dps);
+    online_bias->gyro_x_dps = IMU_GyroOnlineBias_Clamp(online_bias->gyro_x_dps, -IMU_ONLINE_BIAS_LIMIT_DPS, IMU_ONLINE_BIAS_LIMIT_DPS);
+    online_bias->gyro_y_dps = IMU_GyroOnlineBias_Clamp(online_bias->gyro_y_dps, -IMU_ONLINE_BIAS_LIMIT_DPS, IMU_ONLINE_BIAS_LIMIT_DPS);
+    online_bias->gyro_z_dps = IMU_GyroOnlineBias_Clamp(online_bias->gyro_z_dps, -IMU_ONLINE_BIAS_LIMIT_DPS, IMU_ONLINE_BIAS_LIMIT_DPS);
+    return true;
+}
+
+void IMU_GyroOnlineBias_Apply(const IMU_GyroOnlineBias_t *online_bias, MPU6050_Data_t *data)
+{
+    if ((online_bias == NULL) || (data == NULL)) return;
+    data->gyro_x_dps -= online_bias->gyro_x_dps;
+    data->gyro_y_dps -= online_bias->gyro_y_dps;
+    data->gyro_z_dps -= online_bias->gyro_z_dps;
+}
+
+void IMU_GyroOnlineBias_Get(const IMU_GyroOnlineBias_t *online_bias, float *x_dps, float *y_dps, float *z_dps, bool *learning_allowed)
+{
+    if (online_bias == NULL) return;
+    if (x_dps != NULL) *x_dps = online_bias->gyro_x_dps;
+    if (y_dps != NULL) *y_dps = online_bias->gyro_y_dps;
+    if (z_dps != NULL) *z_dps = online_bias->gyro_z_dps;
+    if (learning_allowed != NULL) *learning_allowed = online_bias->learning_allowed;
 }

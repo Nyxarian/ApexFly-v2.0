@@ -64,6 +64,21 @@ typedef struct
     bool initialized;
     /* true 表示本拍使用了加速度重力修正。 */
     bool accel_correction_valid;
+    /* 低频诊断：加速度健康状态，1=正常，2=可疑，3=动态/不可用。 */
+    uint8_t accel_health_state;
+    /* 低频诊断：持续满足静止门限的样本数。 */
+    uint16_t stationary_sample_count;
+    /* true 表示已持续满足静止门限。 */
+    bool stationary;
+    /* 静止检测使用的上一拍陀螺仪数据。 */
+    float health_last_gyro_x_dps;
+    float health_last_gyro_y_dps;
+    float health_last_gyro_z_dps;
+    bool health_gyro_history_valid;
+    /* 最近一拍重力融合误差的模长。 */
+    float fusion_error_norm;
+    /* 当前加速度重力修正权重，0~1。阶段 4C 动态调整。 */
+    float accel_correction_weight;
 } IMU_Attitude_t;
 
 typedef struct
@@ -126,6 +141,9 @@ bool IMU_Attitude_IsAccelCorrectionValid(const IMU_Attitude_t *attitude);
  * @param z 输出 Z 误差地址，可为空。
  */
 void IMU_Attitude_GetFusionError(const IMU_Attitude_t *attitude, float *x, float *y, float *z);
+
+/** @brief 获取姿态健康诊断：加速度模长、修正状态、静止状态和融合误差。 */
+void IMU_Attitude_GetHealth(const IMU_Attitude_t *attitude, float *accel_norm_g, bool *accel_correction_valid, uint8_t *accel_health_state, bool *stationary, float *fusion_error_norm, float *accel_correction_weight);
 
 /**
  * @brief 获取当前四元数。

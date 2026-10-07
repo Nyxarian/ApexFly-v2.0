@@ -63,6 +63,14 @@ typedef struct
     IMU_GyroBias_t bias;
 } IMU_GyroBiasCollector_t;
 
+typedef struct
+{
+    float gyro_x_dps;
+    float gyro_y_dps;
+    float gyro_z_dps;
+    bool learning_allowed;
+} IMU_GyroOnlineBias_t;
+
 /**
  * @brief 清空累加器并开始一轮零偏采集。
  * @param collector 采集对象。
@@ -81,6 +89,26 @@ bool IMU_GyroBias_Update(IMU_GyroBiasCollector_t *collector, const MPU6050_Data_
  * @param data 输入为原始数据，输出角速度已减零偏；加速度保持不变。
  */
 void IMU_GyroBias_Apply(const IMU_GyroBias_t *bias, MPU6050_Data_t *data);
+
+/** @brief 清零运行时陀螺仪 Bias，结果只保存在 RAM。 */
+void IMU_GyroOnlineBias_Init(IMU_GyroOnlineBias_t *online_bias);
+
+/**
+ * @brief 在满足静止门禁时慢速学习残余角速度。
+ * @param disarmed true 表示未解锁。
+ * @param stationary 姿态模块静止判定。
+ * @param accel_health_ok 加速度健康状态是否为正常。
+ * @param accel_weight 当前重力修正权重。
+ * @param dt_s 本拍周期。
+ * @return 本拍是否允许学习。
+ */
+bool IMU_GyroOnlineBias_Update(IMU_GyroOnlineBias_t *online_bias, bool disarmed, bool stationary, bool accel_health_ok, float accel_weight, float gyro_x_dps, float gyro_y_dps, float gyro_z_dps, float dt_s);
+
+/** @brief 把运行时 Bias 从角速度中扣除。 */
+void IMU_GyroOnlineBias_Apply(const IMU_GyroOnlineBias_t *online_bias, MPU6050_Data_t *data);
+
+/** @brief 读取运行时 Bias 和本拍学习许可。 */
+void IMU_GyroOnlineBias_Get(const IMU_GyroOnlineBias_t *online_bias, float *x_dps, float *y_dps, float *z_dps, bool *learning_allowed);
 
 #ifdef __cplusplus
 }

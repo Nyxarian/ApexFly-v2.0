@@ -128,6 +128,9 @@ void Flow_Task(void *argument);
  */
 void Flow_GetState(FlowState_t *state);
 
+/** @brief 发布机体角速度；快速旋转时冻结光流位置累计。 */
+void Flow_SetMotionContext(float roll_rate_dps, float pitch_rate_dps, float yaw_rate_dps);
+
 #ifdef __cplusplus
 }
 #endif

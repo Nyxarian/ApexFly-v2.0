@@ -65,6 +65,8 @@
 #define FLOW_SUM_LIMIT_COUNTS 5000.0f
 /* 算流量率时的最小时间间隔，单位毫秒。小于它说明这一拍 dt 不可信，保持上一次的速率。 */
 #define FLOW_RATE_DT_MIN_MS 1U
+#define FLOW_ROTATION_SUPPRESS_ENTER_DPS 25.0f
+#define FLOW_ROTATION_SUPPRESS_EXIT_DPS 15.0f
 
 static FlowCxofDevice_t flow_device;
 static FlowState_t flow_snapshot;
@@ -96,6 +98,7 @@ static uint8_t flow_quality_bad_streak;
 static bool flow_ever_got_frame;
 static bool flow_sticks_centered;
 static uint32_t flow_last_position_log_tick;
+static volatile bool flow_motion_suppressed;
 
 #define FLOW_STICK_CENTER_ENTER 30
 #define FLOW_STICK_CENTER_EXIT 50
@@ -104,6 +107,16 @@ static uint32_t flow_last_position_log_tick;
 static float Flow_Absf(float value)
 {
     return (value < 0.0f) ? -value : value;
+}
+
+void Flow_SetMotionContext(float roll_rate_dps, float pitch_rate_dps, float yaw_rate_dps)
+{
+    float max_rate = Flow_Absf(roll_rate_dps);
+    if (Flow_Absf(pitch_rate_dps) > max_rate) max_rate = Flow_Absf(pitch_rate_dps);
+    if (Flow_Absf(yaw_rate_dps) > max_rate) max_rate = Flow_Absf(yaw_rate_dps);
+
+    if (!flow_motion_suppressed && (max_rate >= FLOW_ROTATION_SUPPRESS_ENTER_DPS)) flow_motion_suppressed = true;
+    else if (flow_motion_suppressed && (max_rate <= FLOW_ROTATION_SUPPRESS_EXIT_DPS)) flow_motion_suppressed = false;
 }
 
 static int32_t Flow_ScaleToI32(float value, float scale)
@@ -296,6 +309,15 @@ static void Flow_OnFrame(const FlowCxofFrame_t *frame)
         float counts_x = (float)frame->dx - flow_zero_x;
         float counts_y = (float)frame->dy - flow_zero_y;
 
+        if (flow_motion_suppressed)
+        {
+            flow_snapshot.vx_cps = 0.0f;
+            flow_snapshot.vy_cps = 0.0f;
+            PositionControl_SetMotionSuppressed(true);
+            return;
+        }
+        PositionControl_SetMotionSuppressed(false);
+
         /* ⚠️ 这里直接累加**计数**，**不乘 dt**。
            依据：DX/DY 的定义是"距上次更新以来的位移计数"——它本身已经是一帧的位移量，
            不是速度；再乘一次帧间隔等于把时间权重算了两遍。
@@ -389,6 +411,7 @@ void Flow_Init(void)
     flow_ever_got_frame = false;
     flow_sticks_centered = true;
     flow_last_position_log_tick = 0U;
+    flow_motion_suppressed = false;
 
     flow_zero_x = 0.0f;
     flow_zero_y = 0.0f;

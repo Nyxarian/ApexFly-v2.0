@@ -4,7 +4,7 @@
  * （flow_stub/ 下的 main.h、cmsis_os.h、task.h）。
  *
  * 编译（宿主机 gcc；本文件不碰任何硬件）：
- *   gcc -std=c99 -Wall -Wextra -Wno-unused-parameter -DSTM32G474xx -DUSE_HAL_DRIVER \
+ *   gcc -std=c99 -Wall -Wextra -Wno-unused-parameter -DPOSITION_CONTROL_SIM -DSTM32G474xx -DUSE_HAL_DRIVER \
  *     -I flow_stub -I "../../ApexFly v2.0/Core/Inc" \
  *     -I "../../ApexFly v2.0/Drivers/STM32G4xx_HAL_Driver/Inc" \
  *     -I "../../ApexFly v2.0/Drivers/CMSIS/Device/ST/STM32G4xx/Include" \
@@ -456,7 +456,7 @@ static void Scenario_Enter(int index)
            顺带会把 DMA 标志清掉，于是任务下一拍会重新调 ReceiveToIdle_DMA
            （桩会重新抓缓冲指针、写指针归零）。 */
         Flow_Init();
-        PositionControl_SetSafetyContext(true, true, true);
+        PositionControl_SetSafetyContext(true, true, true, false);
     }
 }
 

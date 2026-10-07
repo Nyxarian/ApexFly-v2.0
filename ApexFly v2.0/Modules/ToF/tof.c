@@ -39,9 +39,14 @@
 
 #include "cmsis_os.h"
 #include "debug.h"
-#include "imu_accel_calibration.h"
+#include "flow.h"
 #include "i2c.h"
+#include "position_control.h"
+#include "radio.h"
 #include "task.h"
+/* vertical_est 不再需要：打印里的 h/vz/v 改成从 vertical_control 的快照读，
+   本任务不再直接碰估计器。 */
+#include "vertical_control.h"
 #include "vl53l1x.h"
 
 /* 步进周期。 */
@@ -249,31 +254,135 @@ void ToF_Task(void *argument)
 
         tof_snapshot.age_ms = (uint32_t)(osKernelGetTickCount() - last_fresh_tick);
 
-        /* 控制环只发布姿态快照；这里以低频发送姿态观测行，不阻塞 250Hz 控制环。 */
+        /* ── 本任务只负责**打印**，不驱动任何东西（H4' 起）───────────
+           高度/垂速估计器在控制环里驱动（倾斜补偿要用姿态角，而姿态角只有控制环算得出来）；
+           控制环里**禁止打印**（一行日志约 10ms，会吃掉两拍 4ms 预算）。
+           所以"谁驱动"和"谁打印"分开：驱动在控制环，打印留在这里。 */
+
+        /* ── 串口打印，按时间节流。 ── */
         if ((int32_t)(osKernelGetTickCount() - next_print_tick) >= 0)
         {
-            IMU_AccelCalibrationControllerStatus_t imu_cal_status;
-            float roll_deg;
-            float pitch_deg;
-            float yaw_deg;
+            VerticalControlSnapshot_t vertical_control_state;
+            RadioFlightStateSnapshot_t radio_state;
+            FlowState_t flow_state;
+            PositionControlSnapshot_t position_control_state;
 
             next_print_tick = osKernelGetTickCount() + TOF_PRINT_PERIOD_MS;
-            IMU_AccelCalibration_GetControllerStatus(&imu_cal_status);
-            if (imu_cal_status.state != IMU_ACCEL_CAL_CONTROLLER_IDLE)
-            {
-                Debug_Printf("[IMU_CAL] st=%u pose=%u/6 next=%s n=%lu/%lu err=%u active=%u\r\n",
-                             (unsigned int)imu_cal_status.state,
-                             (unsigned int)imu_cal_status.completed_pose_count,
-                             IMU_AccelCalibration_PoseName(imu_cal_status.current_pose),
-                             (unsigned long)imu_cal_status.accepted_sample_count,
-                             (unsigned long)imu_cal_status.target_sample_count,
-                             (unsigned int)imu_cal_status.last_error,
-                             imu_cal_status.active_calibration_valid ? 1U : 0U);
-            }
-            else if (Debug_GetAttitudeSnapshot(&roll_deg, &pitch_deg, &yaw_deg))
-            {
-                (void)Debug_PrintAttitudeAngles(roll_deg, pitch_deg, yaw_deg);
-            }
+            /* ⚠️ 估计高度/垂速/有效标志全部从 **vertical_control 的快照**读，
+                  不再单独调 VerticalEst_GetState()。
+               两个理由：① 快照本来就是每拍从估计器转抄的，取一处即一份**同一时刻**的样本，
+                 不会出现 h 与 vz 来自相邻两拍；② 少一次结构拷贝，也少一条跨模块依赖。 */
+            VerticalControl_GetSnapshot(&vertical_control_state);
+            /* 基础油门从遥测快照读：那是控制环每拍发布的**实际**值（含速率限制之后的），
+               普通模式和定高模式都能看到，比从 vertical_control 单独问一个更贴合实际。
+               先给 0：万一快照还没发布过（上电早期），打印出来是 0 而不是随机值。 */
+            radio_state.throttle_pwm_us = 0U;
+            (void)Radio_GetFlightStateSnapshot(&radio_state);
+
+            /* ── 一行打完整个垂直轴（2026-09-15 起，取代原来的例行 [TOF] + [ALT] 两行）──
+               ⚠️ 注意 `[TOF]` 这个标签只用于初始化失败、触发失败和连续丢测量等故障事件，
+                  那是 ToF 模块自己的故障与状态消息，与被合并掉的例行数据行不是一回事。
+               ⚠️ 为什么要合并：原来两行共约 239 字符，其中 h / vz / v 三个字段是
+                  **同一时刻同一来源打了两遍**（两行都读估计器，取出时刻差一拍，
+                  数值还不一样，反而容易让人怀疑是 bug）。合并后约 123 字符。
+
+               四段，各回答一个问题：
+                 ① 传感器  raw   = ToF 原始距离 mm（估计器的输入）
+                 ② 估计器  h/vz/v= 估计高度 cm / 估计垂速 cm/s / 读数是否可信
+                 ③ 状态机  req/mode = 遥控请求 / 实际模式（两者不等就是"被拒"）
+                           st    = 细分状态：0 普通 / 1 定高在干活 / 4 停手 / 5 已进未使能
+                                   **6 失效保持 / 7 失效下降**（H12）
+                           sw/ct = 两层门禁位图（全通分别是 0xF）
+                           stick = 油门杆；h_sp = 目标高度 cm；gt = 停手去抖计时 ms
+                           fs    = 失效计时 ms（H12）：0 没失效 / 0~2000 在保持 / ≥2000 已在下降
+                           fr    = 失效原因（H12）：0 无 / 1 ToF 读数失效 / 2 姿态超限 / 3 高度越界
+                                   ⚠️ **fr=2 时 thr 立刻变成 1000**（判定炸机、不进保持段），是设计不是 bug
+                 ④ 输出    vzsp  = **外环（H13）**：内环的目标垂速 cm/s = h_kp × (h_sp − h)
+                                   ⚠️ **符号**：h_sp > h（命令上升）⇒ 它是**正**的；死区 2cm 内恒 0
+                                   ⭐ 台架上它是"外环有没有接上"的唯一观测量
+                           corr  = **快层**：垂速内环修正量 µs —— ⚠️ **符号必须与 vz 相反**
+                                   （vz>0 时 corr<0），这是负反馈的唯一证据
+                            i     = **慢层**：悬停油门估计器（H10 起），钳在 1150~1650
+                                    ⭐ 台架上**只有它**能看出积分在不在工作：corr 是快层、
+                                       随时可能为 0，而 i 会随"匀速移动飞机"持续变化
+                           thr   = 基础油门 = i + corr，再钳到 [1150, 1650]（普通模式跟杆走，与这两层无关）
+                                   ⚠️ H12 起：`st=6` 时它**恒等于失效前一刻的输出**（锁存值，不跳变）；
+                                      `st=7` 时它从锁存值按 **30µs/s** 单调降到 1000（电机停转）
+
+               ⚠️ 2026-09-15 主动删掉的字段（**不是遗漏**，理由都记在这里）：
+                 filt= / alt=    显示用低通值及其换算结果，raw 一个就够；alt 在遥控器上实时可见
+                 status= / fresh= / age= / err=
+                                 ToF 健康度。⚠️ **删了就没有第二个出口**——黑匣子不记这些。
+                                 将来排查"v 掉到 0 是超量程还是 ToF 挂了"时，必须把这几项加回来，
+                                 或者从 git 历史取删之前那一版
+                 n= / sc=        ToF 与估计器的累计样本数，被 fresh+age 覆盖
+                 gnd=            **与 st=4 完全等价**（代码三条分支恒等）
+                 rate=           由 stick 唯一决定（三段映射是纯函数）
+                 vzsp=           H9 阶段恒 0；**H13 接外环时要加回来**
+                 h= / v= / vz=（旧 [ALT] 那三个）与②段完全重复 */
+            Debug_Printf("[V] raw=%umm | h=%.1fcm vz=%+.1fcm/s v=%u | req=%u mode=%u st=%u sw=0x%X ct=0x%X stick=%u h_sp=%.1f gt=%lums fs=%lums fr=%u | vzsp=%+.1f corr=%+.1f i=%.1f thr=%u\r\n",
+                         (unsigned)tof_snapshot.distance_raw_mm,
+                         (double)vertical_control_state.h_est_cm,
+                         (double)vertical_control_state.vz_est_cms,
+                         vertical_control_state.est_valid ? 1U : 0U,
+                         (unsigned)vertical_control_state.requested_mode,
+                         (unsigned)vertical_control_state.mode,
+                         (unsigned)vertical_control_state.state,
+                         (unsigned)vertical_control_state.switch_gates,
+                         (unsigned)vertical_control_state.control_gates,
+                         (unsigned)vertical_control_state.stick,
+                         (double)vertical_control_state.h_sp_cm,
+                         (unsigned long)vertical_control_state.ground_timer_ms,
+                         (unsigned long)vertical_control_state.failsafe_ms,
+                         (unsigned)vertical_control_state.fail_reason,
+                         (double)vertical_control_state.vz_sp_cms,
+                         (double)vertical_control_state.vz_correction_us,
+                         (double)vertical_control_state.vz_throttle_base_us,
+                         (unsigned)radio_state.throttle_pwm_us);
+
+            /* ── 光流一行（2026-09-18 起）──────────────────────────
+               ⚠️ OF6 仍然**不接任何控制**；[OF] 只显示传感器原始状态。
+               n     = 四重校验全过、成功解出的帧数（持续增长才说明接线/波特率对）
+               bad   = 累加和失败 / 长度或包尾失败（持续增长 ⇒ 波特率或接线有问题）
+               qrej  = 质量不达标被拒的帧数
+               q     = 最近一帧的图像质量 —— **判断地面纹理/光照够不够的唯一依据**
+               dx/dy = 最近一帧的原始位移计数（有符号；单位是"计数"，不是毫米）
+               z     = 标定得到的零点，单位计数/帧（理想应远小于 1）
+               sx/sy = 累积流量（已减零点）—— ⭐ **静止时它不该持续单向增长**
+               v     = 数据是否可用（为 0 时 sx/sy 是**冻结**的旧值，不是清零）
+               cal   = 0 未开始 / 1 采样中 / 2 已完成 / 3 失败待重来
+               a     = 距最近一帧**合格**数据的毫秒数 */
+            Flow_GetState(&flow_state);
+            Debug_Printf("[OF] n=%lu bad=%lu/%lu qrej=%lu | q=%u dx=%d dy=%d | z=%+.4f,%+.4f | sx=%+.1f sy=%+.1f | v=%u cal=%u a=%lums\r\n", (unsigned long)flow_state.frame_count, (unsigned long)flow_state.checksum_error_count, (unsigned long)flow_state.format_error_count, (unsigned long)flow_state.quality_reject_count, (unsigned)flow_state.quality, (int)flow_state.dx, (int)flow_state.dy, (double)flow_state.zero_x, (double)flow_state.zero_y, (double)flow_state.sum_x, (double)flow_state.sum_y, flow_state.valid ? 1U : 0U, (unsigned)flow_state.cal, (unsigned long)flow_state.age_ms);
+
+            /* ── OF8 位置/速度两级环与安全门禁（仍只算不下发）────────
+               n      = 速度环 / 位置环更新次数，约应为 2:1
+               ok     = 光流有效且零点标定完成；否则输出强制为 0
+               fr     = 最近一次安全退出原因：0 无、1 光流、2 链路、3 姿态、4 高度、5 许可
+               p/v/sp = 旋到机体系后的前、右位置 / 速度 / 目标速度
+               raw    = 速度环原始 roll,pitch 角；out 是 2.5Hz 低通后的角
+               ⚠️ out 仅供台架判方向，绝不写 AttitudeControl_Update。 */
+            PositionControl_GetSnapshot(&position_control_state);
+            Debug_Printf("[PC] req=%u gate=0x%02X st=%u fr=%u n=%lu/%lu ok=%u hs=%.2f rot=%u | p=%+.1f,%+.1f v=%+.1f,%+.1f sp=%+.1f,%+.1f | raw=%+.2f,%+.2f out=%+.2f,%+.2f\r\n",
+                         position_control_state.request ? 1U : 0U,
+                         (unsigned)position_control_state.gate_mask,
+                         (unsigned)position_control_state.state,
+                         (unsigned)position_control_state.fault_reason,
+                         (unsigned long)position_control_state.velocity_update_count,
+                         (unsigned long)position_control_state.position_update_count,
+                         position_control_state.valid ? 1U : 0U,
+                         (double)position_control_state.height_scale,
+                         position_control_state.motion_suppressed ? 1U : 0U,
+                         (double)position_control_state.position_forward_counts,
+                         (double)position_control_state.position_right_counts,
+                         (double)position_control_state.velocity_forward_cps,
+                         (double)position_control_state.velocity_right_cps,
+                         (double)position_control_state.velocity_forward_sp_cps,
+                         (double)position_control_state.velocity_right_sp_cps,
+                         (double)position_control_state.raw_roll_deg,
+                         (double)position_control_state.raw_pitch_deg,
+                         (double)position_control_state.roll_deg,
+                         (double)position_control_state.pitch_deg);
         }
 
         /* 每步都让出 CPU：本任务与 magtask 共用 I2C2。 */

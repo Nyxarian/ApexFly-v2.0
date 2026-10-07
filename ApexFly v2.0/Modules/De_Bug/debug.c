@@ -38,6 +38,17 @@ static float debug_attitude_roll_deg;
 static float debug_attitude_pitch_deg;
 static float debug_attitude_yaw_deg;
 static bool debug_attitude_valid;
+static float debug_accel_norm_g;
+static bool debug_accel_correction_valid;
+static uint8_t debug_accel_health_state;
+static bool debug_stationary;
+static float debug_fusion_error_norm;
+static float debug_accel_correction_weight;
+static float debug_gyro_bias_x_dps;
+static float debug_gyro_bias_y_dps;
+static float debug_gyro_bias_z_dps;
+static bool debug_gyro_bias_learning;
+static bool debug_health_valid;
 
 /**
  * @brief 创建互斥锁。可以重复调用，只会创建一次。
@@ -73,6 +84,46 @@ bool Debug_GetAttitudeSnapshot(float *roll_deg, float *pitch_deg, float *yaw_deg
         if (roll_deg != NULL) *roll_deg = debug_attitude_roll_deg;
         if (pitch_deg != NULL) *pitch_deg = debug_attitude_pitch_deg;
         if (yaw_deg != NULL) *yaw_deg = debug_attitude_yaw_deg;
+    }
+    taskEXIT_CRITICAL();
+    return valid;
+}
+
+void Debug_SetAttitudeHealthSnapshot(float accel_norm_g, bool accel_correction_valid, uint8_t accel_health_state, bool stationary, float fusion_error_norm, float accel_correction_weight, float gyro_bias_x_dps, float gyro_bias_y_dps, float gyro_bias_z_dps, bool gyro_bias_learning)
+{
+    taskENTER_CRITICAL();
+    debug_accel_norm_g = accel_norm_g;
+    debug_accel_correction_valid = accel_correction_valid;
+    debug_accel_health_state = accel_health_state;
+    debug_stationary = stationary;
+    debug_fusion_error_norm = fusion_error_norm;
+    debug_accel_correction_weight = accel_correction_weight;
+    debug_gyro_bias_x_dps = gyro_bias_x_dps;
+    debug_gyro_bias_y_dps = gyro_bias_y_dps;
+    debug_gyro_bias_z_dps = gyro_bias_z_dps;
+    debug_gyro_bias_learning = gyro_bias_learning;
+    debug_health_valid = true;
+    taskEXIT_CRITICAL();
+}
+
+bool Debug_GetAttitudeHealthSnapshot(float *accel_norm_g, bool *accel_correction_valid, uint8_t *accel_health_state, bool *stationary, float *fusion_error_norm, float *accel_correction_weight, float *gyro_bias_x_dps, float *gyro_bias_y_dps, float *gyro_bias_z_dps, bool *gyro_bias_learning)
+{
+    bool valid;
+
+    taskENTER_CRITICAL();
+    valid = debug_health_valid;
+    if (valid)
+    {
+        if (accel_norm_g != NULL) *accel_norm_g = debug_accel_norm_g;
+        if (accel_correction_valid != NULL) *accel_correction_valid = debug_accel_correction_valid;
+        if (accel_health_state != NULL) *accel_health_state = debug_accel_health_state;
+        if (stationary != NULL) *stationary = debug_stationary;
+        if (fusion_error_norm != NULL) *fusion_error_norm = debug_fusion_error_norm;
+        if (accel_correction_weight != NULL) *accel_correction_weight = debug_accel_correction_weight;
+        if (gyro_bias_x_dps != NULL) *gyro_bias_x_dps = debug_gyro_bias_x_dps;
+        if (gyro_bias_y_dps != NULL) *gyro_bias_y_dps = debug_gyro_bias_y_dps;
+        if (gyro_bias_z_dps != NULL) *gyro_bias_z_dps = debug_gyro_bias_z_dps;
+        if (gyro_bias_learning != NULL) *gyro_bias_learning = debug_gyro_bias_learning;
     }
     taskEXIT_CRITICAL();
     return valid;
@@ -138,6 +189,23 @@ int Debug_PrintAttitudeAngles(float roll_deg, float pitch_deg, float yaw_deg)
         return -1;
     }
     return length;
+}
+
+int Debug_PrintAttitudeHealthAngles(float roll_deg, float pitch_deg, float yaw_deg, float accel_norm_g, bool accel_correction_valid, uint8_t accel_health_state, bool stationary, float fusion_error_norm, float accel_correction_weight, float gyro_bias_x_dps, float gyro_bias_y_dps, float gyro_bias_z_dps, bool gyro_bias_learning)
+{
+    int length;
+    HAL_StatusTypeDef status;
+
+    if (!Debug_Lock()) return -1;
+    length = snprintf(debug_printf_buffer, sizeof(debug_printf_buffer), "[ATT] roll=%+.2f deg, pitch=%+.2f deg, yaw=%+.2f deg | an=%.3f ac=%u ah=%u st=%u fe=%.4f aw=%.2f | gb=%+.4f,%+.4f,%+.4f gl=%u\r\n", (double)roll_deg, (double)pitch_deg, (double)yaw_deg, (double)accel_norm_g, accel_correction_valid ? 1U : 0U, (unsigned int)accel_health_state, stationary ? 1U : 0U, (double)fusion_error_norm, (double)accel_correction_weight, (double)gyro_bias_x_dps, (double)gyro_bias_y_dps, (double)gyro_bias_z_dps, gyro_bias_learning ? 1U : 0U);
+    if ((length < 0) || (length >= (int)sizeof(debug_printf_buffer)))
+    {
+        Debug_Unlock();
+        return -1;
+    }
+    status = HAL_UART_Transmit(DEBUG_UART, (uint8_t *)debug_printf_buffer, (uint16_t)length, DEBUG_TIMEOUT_MS);
+    Debug_Unlock();
+    return (status == HAL_OK) ? length : -1;
 }
 
 /**

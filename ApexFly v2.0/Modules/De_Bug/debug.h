@@ -43,6 +43,15 @@ void Debug_SetAttitudeSnapshot(float roll_deg, float pitch_deg, float yaw_deg);
 /** @brief 读取最近一拍姿态；尚未收到有效姿态时返回 false。 */
 bool Debug_GetAttitudeSnapshot(float *roll_deg, float *pitch_deg, float *yaw_deg);
 
+/** @brief 发布姿态健康快照，供低优先级任务打印。 */
+void Debug_SetAttitudeHealthSnapshot(float accel_norm_g, bool accel_correction_valid, uint8_t accel_health_state, bool stationary, float fusion_error_norm, float accel_correction_weight, float gyro_bias_x_dps, float gyro_bias_y_dps, float gyro_bias_z_dps, bool gyro_bias_learning);
+
+/** @brief 读取姿态健康快照。 */
+bool Debug_GetAttitudeHealthSnapshot(float *accel_norm_g, bool *accel_correction_valid, uint8_t *accel_health_state, bool *stationary, float *fusion_error_norm, float *accel_correction_weight, float *gyro_bias_x_dps, float *gyro_bias_y_dps, float *gyro_bias_z_dps, bool *gyro_bias_learning);
+
+/** @brief 输出姿态和健康字段，供阶段 4 低频诊断。 */
+int Debug_PrintAttitudeHealthAngles(float roll_deg, float pitch_deg, float yaw_deg, float accel_norm_g, bool accel_correction_valid, uint8_t accel_health_state, bool stationary, float fusion_error_norm, float accel_correction_weight, float gyro_bias_x_dps, float gyro_bias_y_dps, float gyro_bias_z_dps, bool gyro_bias_learning);
+
 /**
  * @brief 仅供姿态调试任务输出机体系三角。
  * @param roll_deg 横滚角，单位度。
