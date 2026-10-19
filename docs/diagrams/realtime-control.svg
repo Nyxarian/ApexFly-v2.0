@@ -1,0 +1,298 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg viewBox="0 0 940 720" data-reader-fit="intrinsic-height" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="signal-flow" data-quality-profile="showcase">
+        <title id="archify-diagram-title">ApexFly 实时控制数据流</title>
+        <desc id="archify-diagram-description">从 IMU 数据就绪到姿态控制、混控、电机输出与旁路记录</desc>
+        
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" fill="#64748b" />
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" fill="#34d399" />
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" fill="#fb7185" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" fill="#a78bfa" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5" />
+          </pattern>
+        </defs>
+
+        
+        <rect width="100%" height="100%" fill="#020617" />
+
+        
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="0" x="16" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle" fill="#cbd5e1">01 / 采样与输入</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="1" x="231" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle" fill="#cbd5e1">02 / 校准、估计与位置环</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="2" x="446" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle" fill="#cbd5e1">03 / 模式与控制</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="3" x="661" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle" fill="#cbd5e1">04 / 混控、执行与旁路</text>
+
+        
+        <path data-edge-from="imu-read" data-edge-to="bias-calibration" data-edge-label="六轴样本" data-edge-key="0" data-edge-id="read-to-bias" data-composition-points="156,157;259,157" d="M 156 157 L 259 157" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <path data-edge-from="bias-calibration" data-edge-to="attitude-estimation" data-edge-label="去偏置数据" data-edge-key="1" data-edge-id="bias-to-attitude" data-composition-points="315,186;315,242" d="M 315 186 L 315 242" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="attitude-estimation" data-edge-to="vertical-estimation" data-edge-label="姿态 / dt" data-edge-key="2" data-edge-id="attitude-to-vertical" data-composition-points="315,300;271,300;271,356;315,356" d="M 315 300 L 271 300 L 271 356 L 315 356" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <path data-edge-from="tof-snapshot" data-edge-to="vertical-estimation" data-edge-label="高度快照" data-edge-key="3" data-edge-id="tof-to-vertical" data-composition-points="156,271;200,271;200,385;259,385" d="M 156 271 L 200 271 L 200 385 L 259 385" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="flow-input" data-edge-to="position-control" data-edge-label="sum/vx" data-edge-key="4" data-edge-id="flow-to-position" data-composition-points="156,385;259,499" data-composition-route="straight" d="M 156 385 L 259 499" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="vertical-estimation" data-edge-to="vertical-control" data-edge-label="h_est / vz" data-edge-key="5" data-edge-id="vertical-est-to-control" data-composition-points="371,385;474,157" data-composition-route="straight" d="M 371 385 L 474 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="vertical-control" data-edge-to="attitude-control" data-edge-label="throttle target" data-edge-key="6" data-edge-id="vertical-to-attitude" data-composition-points="530,186;530,356" d="M 530 186 L 530 356" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="position-control" data-edge-to="attitude-control" data-edge-label="roll / pitch offset" data-edge-key="7" data-edge-id="position-to-attitude" data-composition-points="371,499;474,385" data-composition-route="straight" d="M 371 499 L 474 385" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="attitude-control" data-edge-to="mixer" data-edge-label="throttle + corrections" data-edge-key="8" data-edge-id="attitude-to-mixer" data-composition-points="586,385;689,385" d="M 586 385 L 689 385" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="mixer" data-edge-to="pwm-output" data-edge-label="M1–M4" data-edge-key="9" data-edge-id="mixer-to-pwm" data-composition-points="745,414;745,470" d="M 745 414 L 745 470" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="mixer" data-edge-to="telemetry" data-edge-label="actual state" data-edge-key="10" data-edge-id="mixer-to-telemetry" data-composition-points="801,385;850,385;850,590;820,590" d="M 801 385 L 850 385 L 850 590 L 820 590" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)" stroke="#a78bfa" fill="none" stroke-dasharray="4,4" />
+        <path data-edge-from="mixer" data-edge-to="blackbox-sample" data-edge-label="64 B sample" data-edge-key="11" data-edge-id="mixer-to-blackbox" data-composition-points="745,356;745,440;745,200" d="M 745 356 L 745 440 L 745 200" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)" stroke="#a78bfa" fill="none" stroke-dasharray="4,4" />
+
+        
+        <g id="node-imu-read" data-node-id="imu-read" data-node-label="IMU DRDY + 读取" tabindex="0" role="button" aria-label="聚焦IMU DRDY + 读取，DRDY / timeout · MPU6050, 01 / 采样与输入" aria-pressed="false" data-node-kind="backend" data-node-sublabel="DRDY / timeout · MPU6050" data-node-tag="I2C1" data-node-context="01 / 采样与输入">
+          <title>IMU DRDY + 读取 · DRDY / timeout · MPU6050 · 01 / 采样与输入 · I2C1</title>
+          <rect x="44" y="128" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="44" y="128" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-backend" transform="translate(50 134) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="100" y="159" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">IMU DRDY + 读取</text>
+          <text data-detail="context" x="100" y="170" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">DRDY / timeout · MPU6050</text>
+        <text data-detail="fine" x="100" y="180.1" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">I2C1</text>
+        </g>
+
+        <g id="node-tof-snapshot" data-node-id="tof-snapshot" data-node-label="ToF 高度快照" tabindex="0" role="button" aria-label="聚焦ToF 高度快照，原始高度 / valid_count, 01 / 采样与输入" aria-pressed="false" data-node-kind="backend" data-node-sublabel="原始高度 / valid_count" data-node-tag="低频任务 → 只读快照" data-node-context="01 / 采样与输入">
+          <title>ToF 高度快照 · 原始高度 / valid_count · 01 / 采样与输入 · 低频任务 → 只读快照</title>
+          <rect x="44" y="242" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="44" y="242" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-backend" transform="translate(50 248) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="100" y="273" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">ToF 高度快照</text>
+          <text data-detail="context" x="100" y="284" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">原始高度 / valid_count</text>
+        <text data-detail="fine" x="100" y="294.1" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">低频任务 → 只读快照</text>
+        </g>
+
+        <g id="node-flow-input" data-node-id="flow-input" data-node-label="光流输入" tabindex="0" role="button" aria-label="聚焦光流输入，DMA / 解析 / 标定 / 累计位移, 01 / 采样与输入" aria-pressed="false" data-node-kind="backend" data-node-sublabel="DMA / 解析 / 标定 / 累计位移" data-node-tag="Flow_Task" data-node-context="01 / 采样与输入">
+          <title>光流输入 · DMA / 解析 / 标定 / 累计位移 · 01 / 采样与输入 · Flow_Task</title>
+          <rect x="44" y="356" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="44" y="356" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-backend" transform="translate(50 362) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="90" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">光流输入</text>
+          <text data-detail="context" x="100" y="393" class="t-muted" font-size="6.1" text-anchor="middle" fill="#94a3b8">DMA / 解析 / 标定 / 累计位移</text>
+        <text data-detail="fine" x="100" y="403" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">Flow_Task</text>
+        </g>
+
+        <g id="node-bias-calibration" data-node-id="bias-calibration" data-node-label="校准与在线偏置" tabindex="0" role="button" aria-label="聚焦校准与在线偏置，陀螺零偏 / 加速度校准, 02 / 校准、估计与位置环" aria-pressed="false" data-node-kind="backend" data-node-sublabel="陀螺零偏 / 加速度校准" data-node-tag="armed gate" data-node-context="02 / 校准、估计与位置环">
+          <title>校准与在线偏置 · 陀螺零偏 / 加速度校准 · 02 / 校准、估计与位置环 · armed gate</title>
+          <rect x="259" y="128" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="259" y="128" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(265 134) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="315" y="159" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">校准与在线偏置</text>
+          <text data-detail="context" x="315" y="170" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">陀螺零偏 / 加速度校准</text>
+        <text data-detail="fine" x="315" y="180.1" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">armed gate</text>
+        </g>
+
+        <g id="node-attitude-estimation" data-node-id="attitude-estimation" data-node-label="Mahony 姿态估计" tabindex="0" role="button" aria-label="聚焦Mahony 姿态估计，四元数 → 机体系姿态/角速度, 02 / 校准、估计与位置环" aria-pressed="false" data-node-kind="backend" data-node-sublabel="四元数 → 机体系姿态/角速度" data-node-tag="IMU_Attitude_Update" data-node-context="02 / 校准、估计与位置环">
+          <title>Mahony 姿态估计 · 四元数 → 机体系姿态/角速度 · 02 / 校准、估计与位置环 · IMU_Attitude_Update</title>
+          <rect x="259" y="242" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="259" y="242" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(265 248) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="315" y="273" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">Mahony 姿态估计</text>
+          <text data-detail="context" x="315" y="283.6" class="t-muted" font-size="6.6" text-anchor="middle" fill="#94a3b8">四元数 → 机体系姿态/角速度</text>
+        <text data-detail="fine" x="315" y="293.6" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">IMU_Attitude_Update</text>
+        </g>
+
+        <g id="node-vertical-estimation" data-node-id="vertical-estimation" data-node-label="高度 / 垂速估计" tabindex="0" role="button" aria-label="聚焦高度 / 垂速估计，VerticalEst_Update, 02 / 校准、估计与位置环" aria-pressed="false" data-node-kind="backend" data-node-sublabel="VerticalEst_Update" data-node-tag="ToF valid_count" data-node-context="02 / 校准、估计与位置环">
+          <title>高度 / 垂速估计 · VerticalEst_Update · 02 / 校准、估计与位置环 · ToF valid_count</title>
+          <rect x="259" y="356" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="259" y="356" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(265 362) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="315" y="387" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">高度 / 垂速估计</text>
+          <text data-detail="context" x="315" y="398" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">VerticalEst_Update</text>
+        <text data-detail="fine" x="315" y="408.1" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">ToF valid_count</text>
+        </g>
+
+        <g id="node-position-control" data-node-id="position-control" data-node-label="光流位置 / 速度环" tabindex="0" role="button" aria-label="聚焦光流位置 / 速度环，位置误差 → 速度 → 姿态修正角, 02 / 校准、估计与位置环" aria-pressed="false" data-node-kind="backend" data-node-sublabel="位置误差 → 速度 → 姿态修正角" data-node-tag="PositionControl" data-node-context="02 / 校准、估计与位置环">
+          <title>光流位置 / 速度环 · 位置误差 → 速度 → 姿态修正角 · 02 / 校准、估计与位置环 · PositionControl</title>
+          <rect x="259" y="470" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="259" y="470" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(265 476) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="315" y="501" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">光流位置 / 速度环</text>
+          <text data-detail="context" x="315" y="511.1" class="t-muted" font-size="6.1" text-anchor="middle" fill="#94a3b8">位置误差 → 速度 → 姿态修正角</text>
+        <text data-detail="fine" x="315" y="521" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">PositionControl</text>
+        </g>
+
+        <g id="node-vertical-control" data-node-id="vertical-control" data-node-label="定高模式控制" tabindex="0" role="button" aria-label="聚焦定高模式控制，模式 / h_sp / 垂速环, 03 / 模式与控制" aria-pressed="false" data-node-kind="backend" data-node-sublabel="模式 / h_sp / 垂速环" data-node-tag="VerticalControl_Update" data-node-context="03 / 模式与控制">
+          <title>定高模式控制 · 模式 / h_sp / 垂速环 · 03 / 模式与控制 · VerticalControl_Update</title>
+          <rect x="474" y="128" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="474" y="128" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(480 134) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="530" y="159" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">定高模式控制</text>
+          <text data-detail="context" x="530" y="170" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">模式 / h_sp / 垂速环</text>
+        <text data-detail="fine" x="530" y="180.1" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">VerticalControl_Update</text>
+        </g>
+
+        <g id="node-attitude-control" data-node-id="attitude-control" data-node-label="姿态串级 PID" tabindex="0" role="button" aria-label="聚焦姿态串级 PID，角度环 → 角速度环 → 三轴修正, 03 / 模式与控制" aria-pressed="false" data-node-kind="backend" data-node-sublabel="角度环 → 角速度环 → 三轴修正" data-node-tag="AttitudeControl_Update" data-node-context="03 / 模式与控制">
+          <title>姿态串级 PID · 角度环 → 角速度环 → 三轴修正 · 03 / 模式与控制 · AttitudeControl_Update</title>
+          <rect x="474" y="356" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="474" y="356" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(480 362) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="530" y="387" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">姿态串级 PID</text>
+          <text data-detail="context" x="530" y="397.1" class="t-muted" font-size="6.1" text-anchor="middle" fill="#94a3b8">角度环 → 角速度环 → 三轴修正</text>
+        <text data-detail="fine" x="530" y="407" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">AttitudeControl_Update</text>
+        </g>
+
+        <g id="node-mixer" data-node-id="mixer" data-node-label="X 架混控" tabindex="0" role="button" aria-label="聚焦X 架混控，基础油门 + 三轴修正 → M1~M4, 04 / 混控、执行与旁路" aria-pressed="false" data-node-kind="backend" data-node-sublabel="基础油门 + 三轴修正 → M1~M4" data-node-tag="Mixer_Calculate" data-node-context="04 / 混控、执行与旁路">
+          <title>X 架混控 · 基础油门 + 三轴修正 → M1~M4 · 04 / 混控、执行与旁路 · Mixer_Calculate</title>
+          <rect x="689" y="356" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="689" y="356" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(695 362) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="735" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">X 架混控</text>
+          <text data-detail="context" x="745" y="393" class="t-muted" font-size="6.4" text-anchor="middle" fill="#94a3b8">基础油门 + 三轴修正 → M1~M4</text>
+        <text data-detail="fine" x="745" y="403" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">Mixer_Calculate</text>
+        </g>
+
+        <g id="node-pwm-output" data-node-id="pwm-output" data-node-label="TIM8 PWM / 电机" tabindex="0" role="button" aria-label="聚焦TIM8 PWM / 电机，四路脉宽执行, 04 / 混控、执行与旁路" aria-pressed="false" data-node-kind="external" data-node-sublabel="四路脉宽执行" data-node-tag="Motor_SetPulseUs" data-node-context="04 / 混控、执行与旁路">
+          <title>TIM8 PWM / 电机 · 四路脉宽执行 · 04 / 混控、执行与旁路 · Motor_SetPulseUs</title>
+          <rect x="689" y="470" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="689" y="470" width="112" height="58" rx="6" class="c-external" stroke-width="1.5" fill="#101725" stroke="#94a3b8" />
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(695 476) scale(0.6875)" color="#94a3b8" stroke="#94a3b8">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5" />
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="745" y="501" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">TIM8 PWM / 电机</text>
+          <text data-detail="context" x="745" y="512" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">四路脉宽执行</text>
+        <text data-detail="fine" x="745" y="522.1" class="t-external" font-size="7" text-anchor="middle" fill="#94a3b8">Motor_SetPulseUs</text>
+        </g>
+
+        <g id="node-blackbox-sample" data-node-id="blackbox-sample" data-node-label="黑匣子样本" tabindex="0" role="button" aria-label="聚焦黑匣子样本，64 B sample / 参数 / 状态, 04 / 混控、执行与旁路" aria-pressed="false" data-node-kind="database" data-node-sublabel="64 B sample / 参数 / 状态" data-node-tag="Blackbox_SubmitSample" data-node-context="04 / 混控、执行与旁路">
+          <title>黑匣子样本 · 64 B sample / 参数 / 状态 · 04 / 混控、执行与旁路 · Blackbox_SubmitSample</title>
+          <rect x="670" y="128" width="150" height="72" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="670" y="128" width="150" height="72" rx="6" class="c-database" stroke-width="1.5" fill="#21154e" stroke="#a78bfa" />
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(676 134) scale(0.6875)" color="#a78bfa" stroke="#a78bfa">
+            <ellipse cx="8" cy="4" rx="5" ry="2" />
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="745" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">黑匣子样本</text>
+          <text data-detail="context" x="745" y="165" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">64 B sample / 参数 / 状态</text>
+        <text data-detail="fine" x="745" y="189" class="t-database" font-size="7" text-anchor="middle" fill="#a78bfa">Blackbox_SubmitSample</text>
+        </g>
+
+        <g id="node-telemetry" data-node-id="telemetry" data-node-label="遥测发布" tabindex="0" role="button" aria-label="聚焦遥测发布，实际模式 / 姿态 / 油门 / 高度, 04 / 混控、执行与旁路" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="实际模式 / 姿态 / 油门 / 高度" data-node-tag="Radio_PublishFlightState" data-node-context="04 / 混控、执行与旁路">
+          <title>遥测发布 · 实际模式 / 姿态 / 油门 / 高度 · 04 / 混控、执行与旁路 · Radio_PublishFlightState</title>
+          <rect x="670" y="554" width="150" height="72" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="670" y="554" width="150" height="72" rx="6" class="c-messagebus" stroke-width="1.5" fill="#4b331f" stroke="#fb923c" />
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(676 560) scale(0.6875)" color="#fb923c" stroke="#fb923c">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="745" y="575" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">遥测发布</text>
+          <text data-detail="context" x="745" y="591" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">实际模式 / 姿态 / 油门 / 高度</text>
+        <text data-detail="fine" x="745" y="615" class="t-messagebus" font-size="7" text-anchor="middle" fill="#fb923c">Radio_PublishFlightState</text>
+        </g>
+
+        
+        <g data-detail="context" data-edge-from="imu-read" data-edge-to="bias-calibration" data-edge-label="六轴样本" data-edge-key="0" data-edge-id="read-to-bias">
+          <rect x="177" y="136" width="61" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="207.5" y="147" class="t-edge-default" font-size="8" text-anchor="middle" fill="#64748b">六轴样本</text>
+        <text data-detail="fine" x="207.5" y="158" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">raw sample</text>
+        </g>
+        <g data-detail="context" data-edge-from="bias-calibration" data-edge-to="attitude-estimation" data-edge-label="去偏置数据" data-edge-key="1" data-edge-id="bias-to-attitude">
+          <rect x="274.7" y="190" width="80.6" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="315" y="201" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">去偏置数据</text>
+        <text data-detail="fine" x="315" y="212" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">calibrated IMU</text>
+        </g>
+        <g data-detail="context" data-edge-from="attitude-estimation" data-edge-to="vertical-estimation" data-edge-label="姿态 / dt" data-edge-key="2" data-edge-id="attitude-to-vertical">
+          <rect x="293.05" y="307" width="65.9" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="326" y="318" class="t-edge-default" font-size="8" text-anchor="middle" fill="#64748b">姿态 / dt</text>
+        <text data-detail="fine" x="326" y="329" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">state input</text>
+        </g>
+        <g data-detail="context" data-edge-from="tof-snapshot" data-edge-to="vertical-estimation" data-edge-label="高度快照" data-edge-key="3" data-edge-id="tof-to-vertical">
+          <rect x="117.35" y="307" width="95.3" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="165" y="318" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">高度快照</text>
+        <text data-detail="fine" x="165" y="329" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">valid_count gated</text>
+        </g>
+        <g data-detail="context" data-edge-from="flow-input" data-edge-to="position-control" data-edge-label="sum/vx" data-edge-key="4" data-edge-id="flow-to-position">
+          <rect x="108" y="418" width="61" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="138.5" y="429" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">sum/vx</text>
+        <text data-detail="fine" x="138.5" y="440" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">flow frame</text>
+        </g>
+        <g data-detail="context" data-edge-from="vertical-estimation" data-edge-to="vertical-control" data-edge-label="h_est / vz" data-edge-key="5" data-edge-id="vertical-est-to-control">
+          <rect x="392" y="364" width="61" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="422.5" y="375" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">h_est / vz</text>
+        <text data-detail="fine" x="422.5" y="386" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">feedback</text>
+        </g>
+        <g data-detail="context" data-edge-from="vertical-control" data-edge-to="attitude-control" data-edge-label="throttle target" data-edge-key="6" data-edge-id="vertical-to-attitude">
+          <rect x="487.25" y="190" width="85.5" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="530" y="201" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">throttle target</text>
+        <text data-detail="fine" x="530" y="212" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">mode output</text>
+        </g>
+        <g data-detail="context" data-edge-from="position-control" data-edge-to="attitude-control" data-edge-label="roll / pitch offset" data-edge-key="7" data-edge-id="position-to-attitude">
+          <rect x="369.95" y="478" width="105.1" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="422.5" y="489" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">roll / pitch offset</text>
+        <text data-detail="fine" x="422.5" y="500" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">position correction</text>
+        </g>
+        <g data-detail="context" data-edge-from="attitude-control" data-edge-to="mixer" data-edge-label="throttle + corrections" data-edge-key="8" data-edge-id="attitude-to-mixer">
+          <rect x="577.6" y="418" width="119.8" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="637.5" y="429" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">throttle + corrections</text>
+        <text data-detail="fine" x="637.5" y="440" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">control output</text>
+        </g>
+        <g data-detail="context" data-edge-from="mixer" data-edge-to="pwm-output" data-edge-label="M1–M4" data-edge-key="9" data-edge-id="mixer-to-pwm">
+          <rect x="459.8" y="418" width="90.4" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="505" y="429" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">M1–M4</text>
+        <text data-detail="fine" x="505" y="440" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">actuator command</text>
+        </g>
+        <g data-detail="context" data-edge-from="mixer" data-edge-to="telemetry" data-edge-label="actual state" data-edge-key="10" data-edge-id="mixer-to-telemetry">
+          <rect x="804.8" y="523.5" width="90.4" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="850" y="534.5" class="t-edge-dashed" font-size="8" text-anchor="middle" fill="#a78bfa">actual state</text>
+        <text data-detail="fine" x="850" y="545.5" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">telemetry branch</text>
+        </g>
+        <g data-detail="context" data-edge-from="mixer" data-edge-to="blackbox-sample" data-edge-label="64 B sample" data-edge-key="11" data-edge-id="mixer-to-blackbox">
+          <rect x="694.9" y="299" width="100.2" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="745" y="310" class="t-edge-dashed" font-size="8" text-anchor="middle" fill="#a78bfa">64 B sample</text>
+        <text data-detail="fine" x="745" y="321" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">observation branch</text>
+        </g>
+
+        
+        <g data-legend="" data-legend-bridge="">
+          <text x="40" y="664" class="t-primary" font-size="12" font-weight="650" fill="#ffffff">图例</text>
+          <g data-legend-semantic-kind="emphasis" data-legend-x="40" data-legend-baseline="684" data-legend-width="83">
+            <path d="M 40 681 L 74 681" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+            <text x="83" y="684" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">主要数据</text>
+          </g>
+          <g data-legend-semantic-kind="dashed" data-legend-x="145" data-legend-baseline="684" data-legend-width="93">
+            <path d="M 145 681 L 179 681" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)" stroke="#a78bfa" fill="none" stroke-dasharray="4,4" />
+            <text x="188" y="684" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">异步批处理</text>
+          </g>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="数据存储" data-legend-x="260" data-legend-baseline="684" data-legend-width="83">
+            <rect x="260" y="676" width="14" height="9" rx="2" class="c-database" stroke-width="1" fill="#21154e" stroke="#a78bfa" />
+            <text x="282" y="684" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">数据存储</text>
+          </g>
+          <g data-legend-semantic-kind="default" data-legend-x="365" data-legend-baseline="684" data-legend-width="73">
+            <path d="M 365 681 L 399 681" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+            <text x="408" y="684" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">数据流</text>
+          </g>
+        </g>
+      </svg>

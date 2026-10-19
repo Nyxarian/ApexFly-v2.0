@@ -1,0 +1,383 @@
+<svg viewBox="0 0 1129 860" data-reader-fit="intrinsic-height" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="signal-flow" data-quality-profile="showcase">
+        <title id="archify-diagram-title">ApexFly 飞行状态机与故障保护</title>
+        <desc id="archify-diagram-description">把解锁门禁、起飞/正常飞行、定高失效与安全停桨放在同一条可追溯路径上</desc>
+        <!-- Definitions -->
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" />
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" />
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <!-- Lifecycle bands -->
+        <text x="18" y="88" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">飞行主流程</text>
+        <text x="18" y="364" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">保护与恢复</text>
+        <text x="18" y="548" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">定点保护旁路</text>
+        <text x="18" y="732" class="t-dim" font-size="10" font-weight="600" writing-mode="vertical-rl" text-anchor="middle">安全出口</text>
+
+        <!-- Primary lifecycle rail -->
+
+
+        <!-- Transition paths -->
+        <g data-graph-role="automatic-crossover" style="--step:0">
+          <path data-graph-role="automatic-crossover-underlay" d="M 200 88 L 299 88" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="power_on" data-edge-to="standby" data-edge-label="初始化完成" data-edge-key="0" data-composition-points="200,88;299,88" data-composition-crossover="halo" d="M 200 88 L 299 88" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:1">
+          <path data-graph-role="automatic-crossover-underlay" d="M 439 73 L 542 73" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="standby" data-edge-to="arm_gate" data-edge-label="有效解锁请求" data-edge-key="1" data-composition-points="439,73;542,73" data-composition-crossover="halo" d="M 439 73 L 542 73" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:2">
+          <path data-graph-role="automatic-crossover-underlay" d="M 682 88 L 738 88" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="arm_gate" data-edge-to="armed" data-edge-label="门禁通过" data-edge-key="2" data-composition-points="682,88;738,88" data-composition-crossover="halo" d="M 682 88 L 738 88" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:3">
+          <path data-graph-role="automatic-crossover-underlay" d="M 542 103 L 439 103" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="arm_gate" data-edge-to="standby" data-edge-label="门禁未过" data-edge-key="3" data-composition-points="542,103;439,103" data-composition-crossover="halo" d="M 542 103 L 439 103" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:4">
+          <path data-graph-role="automatic-crossover-underlay" d="M 878 88 L 929 88" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="armed" data-edge-to="flight" data-edge-label="起飞" data-edge-key="4" data-composition-points="878,88;929,88" data-composition-crossover="halo" d="M 878 88 L 929 88" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:5">
+          <path data-graph-role="automatic-crossover-underlay" d="M 823 120 L 823 129 Q 823 138 814 138 L 363 138 Q 354 138 354 129 L 354 120" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="armed" data-edge-to="standby" data-edge-label="上锁" data-edge-key="5" data-composition-points="823,120;823,138;354,138;354,120" data-composition-crossover="halo" d="M 823 120 L 823 129 Q 823 138 814 138 L 363 138 Q 354 138 354 129 L 354 120" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:6">
+          <path data-graph-role="automatic-crossover-underlay" d="M 963 120 L 963 172 Q 963 182 953 182 L 394 182 Q 384 182 384 172 L 384 120" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="flight" data-edge-to="standby" data-edge-label="正常上锁" data-edge-key="6" data-composition-points="963,120;963,182;384,182;384,120" data-composition-crossover="halo" d="M 963 120 L 963 172 Q 963 182 953 182 L 394 182 Q 384 182 384 172 L 384 120" class="a-default" stroke-width="1.1" marker-end="url(#arrowhead)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:7">
+          <path data-graph-role="automatic-crossover-underlay" d="M 130 120 L 130 332" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="power_on" data-edge-to="imu_fault" data-edge-label="初始化或读数失败" data-edge-key="7" data-composition-points="130,120;130,332" data-composition-crossover="halo" d="M 130 120 L 130 332" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:8">
+          <path data-graph-role="automatic-crossover-underlay" d="M 130 396 L 130 606 Q 130 616 140 616 L 557 616 Q 567 616 567 626 L 567 700" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="imu_fault" data-edge-to="motors_stopped" data-edge-label="四路 1000µs / 重初始化" data-edge-key="8" data-composition-points="130,396;130,616;567,616;567,700" data-composition-crossover="halo" d="M 130 396 L 130 606 Q 130 616 140 616 L 557 616 Q 567 616 567 626 L 567 700" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:9">
+          <path data-graph-role="automatic-crossover-underlay" d="M 793 120 L 793 150 Q 793 160 783 160 L 364 160 Q 354 160 354 170 L 354 332" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="armed" data-edge-to="link_fault" data-edge-label="失联 &gt; 1500ms" data-edge-key="9" data-composition-points="793,120;793,160;354,160;354,332" data-composition-crossover="halo" d="M 793 120 L 793 150 Q 793 160 783 160 L 364 160 Q 354 160 354 170 L 354 332" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:10">
+          <path data-graph-role="automatic-crossover-underlay" d="M 945 120 L 945 194 Q 945 204 935 204 L 394 204 Q 384 204 384 214 L 384 332" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="flight" data-edge-to="link_fault" data-edge-label="失联 &gt; 1500ms" data-edge-key="10" data-composition-points="945,120;945,204;384,204;384,332" data-composition-crossover="halo" d="M 945 120 L 945 194 Q 945 204 935 204 L 394 204 Q 384 204 384 214 L 384 332" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:11">
+          <path data-graph-role="automatic-crossover-underlay" d="M 369 396 L 369 446 Q 369 456 379 456 L 587 456 Q 597 456 597 466 L 597 700" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="link_fault" data-edge-to="motors_stopped" data-edge-label="armed=false → 1000µs" data-edge-key="11" data-composition-points="369,396;369,456;597,456;597,700" data-composition-crossover="halo" d="M 369 396 L 369 446 Q 369 456 379 456 L 587 456 Q 597 456 597 466 L 597 700" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:12">
+          <path data-graph-role="automatic-crossover-underlay" d="M 981 120 L 981 216 Q 981 226 971 226 L 622 226 Q 612 226 612 236 L 612 332" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="flight" data-edge-to="sensor_fault" data-edge-label="ToF 失效 / 高度越界" data-edge-key="12" data-composition-points="981,120;981,226;612,226;612,332" data-composition-crossover="halo" d="M 981 120 L 981 216 Q 981 226 971 226 L 622 226 Q 612 226 612 236 L 612 332" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:13">
+          <path data-graph-role="automatic-crossover-underlay" d="M 682 364 L 738 364" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="sensor_fault" data-edge-to="failsafe_hold" data-edge-key="13" data-composition-points="682,364;738,364" data-composition-crossover="halo" d="M 682 364 L 738 364" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:14">
+          <path data-graph-role="automatic-crossover-underlay" d="M 808 332 L 808 323 Q 808 314 817 314 L 1043 314 Q 1053 314 1053 304 L 1053 120" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="failsafe_hold" data-edge-to="flight" data-edge-key="14" data-composition-points="808,332;808,314;1053,314;1053,120" data-composition-crossover="halo" d="M 808 332 L 808 323 Q 808 314 817 314 L 1043 314 Q 1053 314 1053 304 L 1053 120" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:15">
+          <path data-graph-role="automatic-crossover-underlay" d="M 878 364 L 929 364" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="failsafe_hold" data-edge-to="failsafe_descend" data-edge-key="15" data-composition-points="878,364;929,364" data-composition-crossover="halo" d="M 878 364 L 929 364" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:16">
+          <path data-graph-role="automatic-crossover-underlay" d="M 999 396 L 999 654 Q 999 664 989 664 L 667 664 Q 657 664 657 674 L 657 700" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="failsafe_descend" data-edge-to="motors_stopped" data-edge-label="降到 1000µs" data-edge-key="16" data-composition-points="999,396;999,664;657,664;657,700" data-composition-crossover="halo" d="M 999 396 L 999 654 Q 999 664 989 664 L 667 664 Q 657 664 657 674 L 657 700" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:17">
+          <path data-graph-role="automatic-crossover-underlay" d="M 1035 120 L 1035 282 Q 1035 292 1025 292 L 730 292 Q 720 292 720 302 L 720 630 Q 720 640 710 640 L 637 640 Q 627 640 627 650 L 627 700" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="flight" data-edge-to="motors_stopped" data-edge-key="17" data-composition-points="1035,120;1035,292;720,292;720,640;627,640;627,700" data-composition-crossover="halo" d="M 1035 120 L 1035 282 Q 1035 292 1025 292 L 730 292 Q 720 292 720 302 L 720 630 Q 720 640 710 640 L 637 640 Q 627 640 627 650 L 627 700" class="a-security" stroke-width="1.1" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:18">
+          <path data-graph-role="automatic-crossover-underlay" d="M 1017 120 L 1017 260 Q 1017 270 1007 270 L 720 270 Q 710 270 710 280 L 710 470 Q 710 480 700 480 L 394 480 Q 384 480 384 490 L 384 516" fill="none" stroke="var(--mask)" stroke-width="5.1" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="flight" data-edge-to="position_latched" data-edge-key="18" data-composition-points="1017,120;1017,270;710,270;710,480;384,480;384,516" data-composition-crossover="halo" d="M 1017 120 L 1017 260 Q 1017 270 1007 270 L 720 270 Q 710 270 710 280 L 710 470 Q 710 480 700 480 L 394 480 Q 384 480 384 490 L 384 516" class="a-dashed" stroke-width="1.1" marker-end="url(#arrowhead-dashed)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:19">
+          <path data-graph-role="automatic-crossover-underlay" d="M 354 516 L 354 442 Q 354 432 364 432 L 690 432 Q 700 432 700 422 L 700 258 Q 700 248 710 248 L 989 248 Q 999 248 999 238 L 999 120" fill="none" stroke="var(--mask)" stroke-width="5.6" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="position_latched" data-edge-to="flight" data-edge-key="19" data-composition-points="354,516;354,432;700,432;700,248;999,248;999,120" data-composition-crossover="halo" d="M 354 516 L 354 442 Q 354 432 364 432 L 690 432 Q 700 432 700 422 L 700 258 Q 700 248 710 248 L 989 248 Q 999 248 999 238 L 999 120" class="a-emphasis" stroke-width="1.6" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+
+        <!-- States -->
+        <g id="node-power_on" data-node-id="power_on" data-node-label="上电初始化" tabindex="0" role="button" aria-label="聚焦上电初始化，IMU / 偏置 / 姿态 / 高度, 飞行主流程" aria-pressed="false" data-node-kind="start" data-node-sublabel="IMU / 偏置 / 姿态 / 高度" data-node-tag="boot" data-node-context="飞行主流程">
+          <title>上电初始化 · IMU / 偏置 / 姿态 / 高度 · 飞行主流程 · boot</title>
+          <rect x="60" y="56" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="60" y="56" width="140" height="64" rx="7" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-lifecycle-initial-marker="">
+            <circle cx="38" cy="88" r="4.5" style="fill: var(--arrow-emphasis)"/><path d="M 42.5 88 L 53 88" class="a-emphasis" stroke-width="1.4"/><path d="M 52 84.5 L 59 88 L 52 91.5 Z" style="fill: var(--arrow-emphasis)"/>
+          </g>
+          <g aria-hidden="true" data-semantic-sigil="start" class="semantic-sigil s-frontend" transform="translate(66 62) scale(0.6875)">
+            <circle cx="8" cy="8" r="5"/>
+            <path d="m7 5.4 3.6 2.6L7 10.6Z" class="sigil-fill"/>
+          </g>
+        <text data-detail="fine" x="83" y="70" class="t-frontend" font-size="8" font-weight="700">01</text>
+          <text data-node-label="" data-detail-anchor="" x="130" y="88" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">上电初始化</text>
+          <text data-detail="context" x="130" y="100.3" class="t-muted" font-size="8" text-anchor="middle">IMU / 偏置 / 姿态 / 高度</text>
+        <text data-detail="fine" x="130" y="111.7" class="t-frontend" font-size="8" text-anchor="middle">boot</text>
+        </g>
+
+        <g id="node-standby" data-node-id="standby" data-node-label="上锁待机" tabindex="0" role="button" aria-label="聚焦上锁待机，四路 1000µs / 控制器不输出, 飞行主流程" aria-pressed="false" data-node-kind="waiting" data-node-sublabel="四路 1000µs / 控制器不输出" data-node-tag="disarmed" data-node-context="飞行主流程">
+          <title>上锁待机 · 四路 1000µs / 控制器不输出 · 飞行主流程 · disarmed</title>
+          <rect x="299" y="56" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="299" y="56" width="140" height="64" rx="7" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="waiting" class="semantic-sigil s-cloud" transform="translate(305 62) scale(0.6875)">
+            <path d="M4 2.5h8M4 13.5h8M5 3c0 2.8 2 3.2 3 5-1 1.8-3 2.2-3 5M11 3c0 2.8-2 3.2-3 5 1 1.8 3 2.2 3 5"/>
+          </g>
+        <text data-detail="fine" x="322" y="70" class="t-cloud" font-size="8" font-weight="700">02</text>
+          <text data-node-label="" data-detail-anchor="" x="369" y="79" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">上锁待机</text>
+          <text data-detail="context" x="369" y="96" class="t-muted" font-size="8" text-anchor="middle">四路 1000µs / 控制器不输出</text>
+        <text data-detail="fine" x="369" y="108" class="t-cloud" font-size="8" text-anchor="middle">disarmed</text>
+        </g>
+
+        <g id="node-arm_gate" data-node-id="arm_gate" data-node-label="解锁门禁" tabindex="0" role="button" aria-label="聚焦解锁门禁，链路有效 · IMU 就绪 · 内环启用, 飞行主流程" aria-pressed="false" data-node-kind="decision" data-node-sublabel="链路有效 · IMU 就绪 · 内环启用" data-node-tag="gate" data-node-context="飞行主流程">
+          <title>解锁门禁 · 链路有效 · IMU 就绪 · 内环启用 · 飞行主流程 · gate</title>
+          <rect x="542" y="56" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="542" y="56" width="140" height="64" rx="7" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="neutral" class="semantic-sigil s-database" transform="translate(548 62) scale(0.6875)">
+            <rect x="3" y="3" width="10" height="10" rx="2"/>
+            <circle cx="8" cy="8" r="1.2" class="sigil-fill"/>
+          </g>
+        <text data-detail="fine" x="565" y="70" class="t-database" font-size="8" font-weight="700">03</text>
+          <text data-node-label="" data-detail-anchor="" x="612" y="79" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">解锁门禁</text>
+          <text data-detail="context" x="612" y="96" class="t-muted" font-size="7.3" text-anchor="middle">链路有效 · IMU 就绪 · 内环启用</text>
+        <text data-detail="fine" x="612" y="108" class="t-database" font-size="8" text-anchor="middle">gate</text>
+        </g>
+
+        <g id="node-armed" data-node-id="armed" data-node-label="已解锁" tabindex="0" role="button" aria-label="聚焦已解锁，控制许可已建立，等待起飞动作, 飞行主流程" aria-pressed="false" data-node-kind="active" data-node-sublabel="控制许可已建立，等待起飞动作" data-node-tag="armed" data-node-context="飞行主流程">
+          <title>已解锁 · 控制许可已建立，等待起飞动作 · 飞行主流程 · armed</title>
+          <rect x="738" y="56" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="738" y="56" width="140" height="64" rx="7" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-frontend" transform="translate(744 62) scale(0.6875)">
+            <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14"/>
+          </g>
+        <text data-detail="fine" x="761" y="70" class="t-frontend" font-size="8" font-weight="700">04</text>
+          <text data-node-label="" data-detail-anchor="" x="808" y="79" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">已解锁</text>
+          <text data-detail="context" x="808" y="96" class="t-muted" font-size="7.8" text-anchor="middle">控制许可已建立，等待起飞动作</text>
+        <text data-detail="fine" x="808" y="108" class="t-frontend" font-size="8" text-anchor="middle">armed</text>
+        </g>
+
+        <g id="node-flight" data-node-id="flight" data-node-label="正常飞行" tabindex="0" role="button" aria-label="聚焦正常飞行，手动 / 定高 / 姿态与混控输出, 飞行主流程" aria-pressed="false" data-node-kind="success" data-node-sublabel="手动 / 定高 / 姿态与混控输出" data-node-tag="flight" data-node-context="飞行主流程">
+          <title>正常飞行 · 手动 / 定高 / 姿态与混控输出 · 飞行主流程 · flight</title>
+          <rect x="929" y="56" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="929" y="56" width="140" height="64" rx="7" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="success" class="semantic-sigil s-backend" transform="translate(935 62) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.2 8 1.8 1.8 3.8-4"/>
+          </g>
+        <text data-detail="fine" x="952" y="70" class="t-backend" font-size="8" font-weight="700">05</text>
+          <text data-node-label="" data-detail-anchor="" x="999" y="79" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">正常飞行</text>
+          <text data-detail="context" x="999" y="96" class="t-muted" font-size="7.8" text-anchor="middle">手动 / 定高 / 姿态与混控输出</text>
+        <text data-detail="fine" x="999" y="108" class="t-backend" font-size="8" text-anchor="middle">flight</text>
+        </g>
+
+        <g id="node-imu_fault" data-node-id="imu_fault" data-node-label="IMU 异常" tabindex="0" role="button" aria-label="聚焦IMU 异常，初始化失败 / 连续 I2C 失败, 保护与恢复" aria-pressed="false" data-node-kind="failure" data-node-sublabel="初始化失败 / 连续 I2C 失败" data-node-tag="imu" data-node-context="保护与恢复">
+          <title>IMU 异常 · 初始化失败 / 连续 I2C 失败 · 保护与恢复 · imu</title>
+          <rect x="60" y="332" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="60" y="332" width="140" height="64" rx="7" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(66 338) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="130" y="355" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">IMU 异常</text>
+          <text data-detail="context" x="130" y="372" class="t-muted" font-size="8" text-anchor="middle">初始化失败 / 连续 I2C 失败</text>
+        <text data-detail="fine" x="130" y="384" class="t-security" font-size="8" text-anchor="middle">imu</text>
+        </g>
+
+        <g id="node-link_fault" data-node-id="link_fault" data-node-label="遥控失联" tabindex="0" role="button" aria-label="聚焦遥控失联，&gt; 1500ms：当前实现清零油门, 保护与恢复" aria-pressed="false" data-node-kind="failure" data-node-sublabel="&gt; 1500ms：当前实现清零油门" data-node-tag="link" data-node-context="保护与恢复">
+          <title>遥控失联 · &gt; 1500ms：当前实现清零油门 · 保护与恢复 · link</title>
+          <rect x="299" y="332" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="299" y="332" width="140" height="64" rx="7" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(305 338) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="369" y="355" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">遥控失联</text>
+          <text data-detail="context" x="369" y="372" class="t-muted" font-size="8" text-anchor="middle">&gt; 1500ms：当前实现清零油门</text>
+        <text data-detail="fine" x="369" y="384" class="t-security" font-size="8" text-anchor="middle">link</text>
+        </g>
+
+        <g id="node-sensor_fault" data-node-id="sensor_fault" data-node-label="高度 / ToF 异常" tabindex="0" role="button" aria-label="聚焦高度 / ToF 异常，读数失效或超过可信高度, 保护与恢复" aria-pressed="false" data-node-kind="decision" data-node-sublabel="读数失效或超过可信高度" data-node-tag="sensor" data-node-context="保护与恢复">
+          <title>高度 / ToF 异常 · 读数失效或超过可信高度 · 保护与恢复 · sensor</title>
+          <rect x="542" y="332" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="542" y="332" width="140" height="64" rx="7" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="neutral" class="semantic-sigil s-database" transform="translate(548 338) scale(0.6875)">
+            <rect x="3" y="3" width="10" height="10" rx="2"/>
+            <circle cx="8" cy="8" r="1.2" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="612" y="364" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">高度 / ToF 异常</text>
+          <text data-detail="context" x="612" y="376.3" class="t-muted" font-size="8" text-anchor="middle">读数失效或超过可信高度</text>
+        <text data-detail="fine" x="612" y="387.7" class="t-database" font-size="8" text-anchor="middle">sensor</text>
+        </g>
+
+        <g id="node-failsafe_hold" data-node-id="failsafe_hold" data-node-label="失效保持" tabindex="0" role="button" aria-label="聚焦失效保持，锁存失效前油门，等待恢复, 保护与恢复" aria-pressed="false" data-node-kind="active" data-node-sublabel="锁存失效前油门，等待恢复" data-node-tag="hold" data-node-context="保护与恢复">
+          <title>失效保持 · 锁存失效前油门，等待恢复 · 保护与恢复 · hold</title>
+          <rect x="738" y="332" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="738" y="332" width="140" height="64" rx="7" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-frontend" transform="translate(744 338) scale(0.6875)">
+            <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="808" y="355" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">失效保持</text>
+          <text data-detail="context" x="808" y="372" class="t-muted" font-size="8" text-anchor="middle">锁存失效前油门，等待恢复</text>
+        <text data-detail="fine" x="808" y="384" class="t-frontend" font-size="8" text-anchor="middle">hold</text>
+        </g>
+
+        <g id="node-failsafe_descend" data-node-id="failsafe_descend" data-node-label="保护下降" tabindex="0" role="button" aria-label="聚焦保护下降，30µs/s 降至 1000µs，单向停桨, 保护与恢复" aria-pressed="false" data-node-kind="failure" data-node-sublabel="30µs/s 降至 1000µs，单向停桨" data-node-tag="descend" data-node-context="保护与恢复">
+          <title>保护下降 · 30µs/s 降至 1000µs，单向停桨 · 保护与恢复 · descend</title>
+          <rect x="929" y="332" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="929" y="332" width="140" height="64" rx="7" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(935 338) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="999" y="355" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">保护下降</text>
+          <text data-detail="context" x="999" y="372" class="t-muted" font-size="7.8" text-anchor="middle">30µs/s 降至 1000µs，单向停桨</text>
+        <text data-detail="fine" x="999" y="384" class="t-security" font-size="8" text-anchor="middle">descend</text>
+        </g>
+
+        <g id="node-position_latched" data-node-id="position_latched" data-node-label="定点锁存" tabindex="0" role="button" aria-label="聚焦定点锁存，链路 / 光流 / 姿态 / 高度任一故障, 定点保护旁路" aria-pressed="false" data-node-kind="waiting" data-node-sublabel="链路 / 光流 / 姿态 / 高度任一故障" data-node-tag="latched" data-node-context="定点保护旁路">
+          <title>定点锁存 · 链路 / 光流 / 姿态 / 高度任一故障 · 定点保护旁路 · latched</title>
+          <rect x="259" y="516" width="220" height="64" rx="7" class="c-mask"/>
+          <rect x="259" y="516" width="220" height="64" rx="7" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="waiting" class="semantic-sigil s-cloud" transform="translate(265 522) scale(0.6875)">
+            <path d="M4 2.5h8M4 13.5h8M5 3c0 2.8 2 3.2 3 5-1 1.8-3 2.2-3 5M11 3c0 2.8-2 3.2-3 5 1 1.8 3 2.2 3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="369" y="539" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">定点锁存</text>
+          <text data-detail="context" x="369" y="556" class="t-muted" font-size="8" text-anchor="middle">链路 / 光流 / 姿态 / 高度任一故障</text>
+        <text data-detail="fine" x="369" y="568" class="t-cloud" font-size="8" text-anchor="middle">latched</text>
+        </g>
+
+        <g id="node-motors_stopped" data-node-id="motors_stopped" data-node-label="电机安全停转" tabindex="0" role="button" aria-label="聚焦电机安全停转，输出 1000µs，等待人工重新解锁, 安全出口" aria-pressed="false" data-node-kind="success" data-node-sublabel="输出 1000µs，等待人工重新解锁" data-node-tag="safe-stop" data-node-context="安全出口">
+          <title>电机安全停转 · 输出 1000µs，等待人工重新解锁 · 安全出口 · safe-stop</title>
+          <rect x="542" y="700" width="140" height="64" rx="7" class="c-mask"/>
+          <rect x="542" y="700" width="140" height="64" rx="7" class="c-backend" stroke-width="1.5"/>
+          <rect x="545" y="703" width="134" height="58" rx="4" class="c-backend" style="fill: none" stroke-width="1"/>
+          <g aria-hidden="true" data-semantic-sigil="success" class="semantic-sigil s-backend" transform="translate(548 706) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.2 8 1.8 1.8 3.8-4"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="612" y="732" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">电机安全停转</text>
+          <text data-detail="context" x="612" y="743.8" class="t-muted" font-size="7.5" text-anchor="middle">输出 1000µs，等待人工重新解锁</text>
+        <text data-detail="fine" x="612" y="755.1" class="t-backend" font-size="8" text-anchor="middle">safe-stop</text>
+        </g>
+
+        <!-- Transition labels -->
+        <g data-detail="context" data-edge-from="power_on" data-edge-to="standby" data-edge-label="初始化完成" data-edge-key="0">
+          <rect x="219" y="67" width="61" height="16" rx="4" class="c-mask"/>
+          <text x="249.5" y="78" class="t-edge-emphasis" font-size="8" text-anchor="middle">初始化完成</text>
+        </g>
+        <g data-detail="context" data-edge-from="standby" data-edge-to="arm_gate" data-edge-label="有效解锁请求" data-edge-key="1">
+          <rect x="455.1" y="52" width="70.80000000000001" height="16" rx="4" class="c-mask"/>
+          <text x="490.5" y="63" class="t-edge-emphasis" font-size="8" text-anchor="middle">有效解锁请求</text>
+        </g>
+        <g data-detail="context" data-edge-from="arm_gate" data-edge-to="armed" data-edge-label="门禁通过" data-edge-key="2">
+          <rect x="684.4" y="39" width="51.2" height="16" rx="4" class="c-mask"/>
+          <text x="710" y="50" class="t-edge-emphasis" font-size="8" text-anchor="middle">门禁通过</text>
+        </g>
+        <g data-detail="context" data-edge-from="arm_gate" data-edge-to="standby" data-edge-label="门禁未过" data-edge-key="3">
+          <rect x="464.9" y="112" width="51.2" height="16" rx="4" class="c-mask"/>
+          <text x="490.5" y="123" class="t-edge-dashed" font-size="8" text-anchor="middle">门禁未过</text>
+        </g>
+        <g data-detail="context" data-edge-from="armed" data-edge-to="flight" data-edge-label="起飞" data-edge-key="4">
+          <rect x="887.5" y="124" width="32" height="16" rx="4" class="c-mask"/>
+          <text x="903.5" y="135" class="t-edge-emphasis" font-size="8" text-anchor="middle">起飞</text>
+        </g>
+        <g data-detail="context" data-edge-from="armed" data-edge-to="standby" data-edge-label="上锁" data-edge-key="5">
+          <rect x="689.75" y="117" width="32" height="16" rx="4" class="c-mask"/>
+          <text x="705.75" y="128" class="t-edge-default" font-size="8" text-anchor="middle">上锁</text>
+        </g>
+        <g data-detail="context" data-edge-from="flight" data-edge-to="standby" data-edge-label="正常上锁" data-edge-key="6">
+          <rect x="865.025" y="161" width="51.2" height="16" rx="4" class="c-mask"/>
+          <text x="890.625" y="172" class="t-edge-default" font-size="8" text-anchor="middle">正常上锁</text>
+        </g>
+        <g data-detail="context" data-edge-from="power_on" data-edge-to="imu_fault" data-edge-label="初始化或读数失败" data-edge-key="7">
+          <rect x="33.599999999999994" y="218" width="90.4" height="16" rx="4" class="c-mask"/>
+          <text x="78.8" y="229" class="t-edge-security" font-size="8" text-anchor="middle">初始化或读数失败</text>
+        </g>
+        <g data-detail="context" data-edge-from="imu_fault" data-edge-to="motors_stopped" data-edge-label="四路 1000µs / 重初始化" data-edge-key="8">
+          <rect x="4.199999999999989" y="443" width="119.80000000000001" height="16" rx="4" class="c-mask"/>
+          <text x="64.1" y="454" class="t-edge-security" font-size="8" text-anchor="middle">四路 1000µs / 重初始化</text>
+        </g>
+        <g data-detail="context" data-edge-from="armed" data-edge-to="link_fault" data-edge-label="失联 &gt; 1500ms" data-edge-key="9">
+          <rect x="272.29999999999995" y="238" width="75.7" height="16" rx="4" class="c-mask"/>
+          <text x="310.15" y="249" class="t-edge-security" font-size="8" text-anchor="middle">失联 &gt; 1500ms</text>
+        </g>
+        <g data-detail="context" data-edge-from="flight" data-edge-to="link_fault" data-edge-label="失联 &gt; 1500ms" data-edge-key="10">
+          <rect x="486.4" y="213" width="75.7" height="16" rx="4" class="c-mask"/>
+          <text x="524.25" y="224" class="t-edge-security" font-size="8" text-anchor="middle">失联 &gt; 1500ms</text>
+        </g>
+        <g data-detail="context" data-edge-from="link_fault" data-edge-to="motors_stopped" data-edge-label="armed=false → 1000µs" data-edge-key="11">
+          <rect x="375" y="403" width="110" height="16" rx="4" class="c-mask"/>
+          <text x="430" y="414" class="t-edge-security" font-size="8" text-anchor="middle">armed=false → 1000µs</text>
+        </g>
+        <g data-detail="context" data-edge-from="flight" data-edge-to="sensor_fault" data-edge-label="ToF 失效 / 高度越界" data-edge-key="12">
+          <rect x="500.90000000000003" y="271" width="105.10000000000001" height="16" rx="4" class="c-mask"/>
+          <text x="553.45" y="282" class="t-edge-security" font-size="8" text-anchor="middle">ToF 失效 / 高度越界</text>
+        </g>
+
+
+
+        <g data-detail="context" data-edge-from="failsafe_descend" data-edge-to="motors_stopped" data-edge-label="降到 1000µs" data-edge-key="16">
+          <rect x="927.0999999999999" y="522" width="65.9" height="16" rx="4" class="c-mask"/>
+          <text x="960.05" y="533" class="t-edge-security" font-size="8" text-anchor="middle">降到 1000µs</text>
+        </g>
+
+
+
+
+        <!-- Legend -->
+        <g data-legend="" data-legend-bridge="">
+          <text x="40" y="804" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="start" data-legend-kind="start" data-legend-label="启动 / 初始" data-legend-x="40" data-legend-baseline="824" data-legend-width="110">
+            <circle cx="44.5" cy="820.5" r="4.5" style="fill: var(--arrow-emphasis)"/><path d="M 49 820.5 L 58 820.5" class="a-emphasis" stroke-width="1.4"/><path d="M 57 817 L 64 820.5 L 57 824 Z" style="fill: var(--arrow-emphasis)"/>
+            <text x="74" y="824" class="t-muted" font-size="10" font-weight="500">启动 / 初始</text>
+          </g>
+          <g data-legend-semantic-kind="active" data-legend-kind="active" data-legend-label="运行中" data-legend-x="172" data-legend-baseline="824" data-legend-width="73">
+            <rect x="172" y="816" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+            <text x="194" y="824" class="t-muted" font-size="10" font-weight="500">运行中</text>
+          </g>
+          <g data-legend-semantic-kind="waiting" data-legend-kind="waiting" data-legend-label="等待 / 门禁" data-legend-x="267" data-legend-baseline="824" data-legend-width="98">
+            <rect x="267" y="816" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
+            <text x="289" y="824" class="t-muted" font-size="10" font-weight="500">等待 / 门禁</text>
+          </g>
+          <g data-legend-semantic-kind="decision" data-legend-kind="decision" data-legend-label="判断 / 保护" data-legend-x="387" data-legend-baseline="824" data-legend-width="98">
+            <rect x="387" y="816" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+            <text x="409" y="824" class="t-muted" font-size="10" font-weight="500">判断 / 保护</text>
+          </g>
+          <g data-legend-semantic-kind="success" data-legend-kind="success" data-legend-label="正常 / 已恢复" data-legend-x="507" data-legend-baseline="824" data-legend-width="108">
+            <rect x="507" y="816" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="529" y="824" class="t-muted" font-size="10" font-weight="500">正常 / 已恢复</text>
+          </g>
+          <g data-legend-semantic-kind="failure" data-legend-kind="failure" data-legend-label="故障 / 保护出口" data-legend-x="637" data-legend-baseline="824" data-legend-width="118">
+            <rect x="637" y="816" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="659" y="824" class="t-muted" font-size="10" font-weight="500">故障 / 保护出口</text>
+          </g>
+          <g data-legend-semantic-kind="neutral" data-legend-x="777" data-legend-baseline="824" data-legend-width="62">
+            <rect x="777" y="816" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+            <text x="799" y="824" class="t-muted" font-size="10" font-weight="500">中性旁路</text>
+          </g>
+          <g data-legend-semantic-kind="external" data-legend-x="861" data-legend-baseline="824" data-legend-width="62">
+            <rect x="861" y="816" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+            <text x="883" y="824" class="t-muted" font-size="10" font-weight="500">外部状态</text>
+          </g>
+          <g data-legend-semantic-kind="final" data-legend-x="945" data-legend-baseline="824" data-legend-width="44">
+            <rect x="945" y="816" width="14" height="9" rx="2" class="c-external" stroke-width="1"/><rect x="947.5" y="818.5" width="9" height="4" rx="1" class="c-external" style="fill: none" stroke-width="0.8"/>
+            <text x="969" y="824" class="t-muted" font-size="10" font-weight="500">终态</text>
+          </g>
+        </g>
+      </svg>

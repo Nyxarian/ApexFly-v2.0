@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="ApexFly V2.0 嵌入式四轴飞控工程展示工作台">
+  <title>ApexFly V2.0 · Flight-control workspace</title>
+  <style>
+    :root { --bg:#070707; --panel:#101113; --panel-2:#17191b; --line:rgba(255,255,255,.16); --line-soft:rgba(255,255,255,.09); --text:#f6f6f4; --muted:#a5a6a8; --faint:#6f7174; --accent:#dfff4b; --blue:#a6d0ff; --shadow:0 28px 90px rgba(0,0,0,.52); }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; color:var(--text); background:var(--bg); font:14px/1.55 Inter,"SF Pro Display","Segoe UI","Microsoft YaHei",sans-serif; letter-spacing:-.01em; }
+    body:before { content:""; position:fixed; inset:0; z-index:-2; pointer-events:none; background:radial-gradient(ellipse at 50% -10%, rgba(255,255,255,.17), transparent 38%), radial-gradient(ellipse at 100% 35%, rgba(158,197,255,.11), transparent 27%), radial-gradient(ellipse at 2% 78%, rgba(223,255,75,.06), transparent 26%), linear-gradient(118deg, rgba(255,255,255,.045), transparent 24%, transparent 71%, rgba(255,255,255,.032)); }
+    body:after { content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.34; background-image:linear-gradient(rgba(255,255,255,.065) 1px, transparent 1px),linear-gradient(90deg, rgba(255,255,255,.065) 1px, transparent 1px),radial-gradient(circle at 14% 19%, rgba(255,255,255,.22) 0 1px, transparent 1.5px),radial-gradient(circle at 84% 11%, rgba(255,255,255,.18) 0 1px, transparent 1.5px); background-size:56px 56px,56px 56px,160px 160px,220px 220px; mask-image:linear-gradient(to bottom,#000 0%,rgba(0,0,0,.78) 54%,transparent 100%); }
+    a { color:inherit; }
+    .wrap { width:min(1240px,calc(100% - 48px)); margin:auto; }
+    .topbar { position:sticky; top:0; z-index:10; height:76px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line-soft); background:rgba(7,7,7,.76); backdrop-filter:blur(22px) saturate(130%); }
+    .brand { display:flex; align-items:center; gap:11px; text-decoration:none; font-weight:700; letter-spacing:-.025em; }
+    .brand-mark { width:32px; height:32px; display:grid; place-items:center; border:1px solid rgba(223,255,75,.78); border-radius:50%; color:var(--accent); font-size:15px; box-shadow:0 0 24px rgba(223,255,75,.12); }
+    .brand small { display:block; color:var(--faint); font:500 9px/1.2 ui-monospace,SFMono-Regular,Consolas,monospace; letter-spacing:.18em; text-transform:uppercase; }
+    nav { display:flex; gap:28px; color:#b6b7b8; font-size:12px; letter-spacing:.01em; }
+    nav a { text-decoration:none; transition:color .2s ease; }
+    nav a:hover { color:#fff; }
+    .top-actions { display:flex; gap:9px; align-items:center; }
+    .pill { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:40px; padding:0 18px; border:1px solid var(--line); border-radius:99px; text-decoration:none; font-size:12px; transition:.22s ease; }
+    .pill:hover { border-color:rgba(255,255,255,.5); background:rgba(255,255,255,.07); transform:translateY(-2px); }
+    .pill.light { color:#0a0a0a; border-color:#fff; background:#fff; }
+    .pill.light:hover { border-color:var(--accent); background:var(--accent); }
+    .pill.lime { color:#0a0b06; border-color:var(--accent); background:var(--accent); box-shadow:0 8px 30px rgba(223,255,75,.11); }
+    .hero { min-height:550px; display:grid; grid-template-columns:.86fr 1.14fr; gap:55px; align-items:center; padding:84px 0 72px; }
+    .eyebrow { color:#c5c6c7; font:700 10px/1 ui-monospace,SFMono-Regular,Consolas,monospace; letter-spacing:.22em; text-transform:uppercase; }
+    h1 { margin:19px 0 21px; max-width:590px; font-size:clamp(52px,7vw,96px); font-weight:600; line-height:.94; letter-spacing:-.085em; }
+    h1 em { color:var(--accent); font-style:normal; }
+    .lead { max-width:510px; margin:0 0 28px; color:var(--muted); font-size:15px; line-height:1.7; }
+    .hero-actions { display:flex; flex-wrap:wrap; gap:10px; }
+    .hero-stage { position:relative; min-height:390px; overflow:hidden; border:1px solid var(--line); border-radius:24px; background:linear-gradient(145deg,rgba(34,36,39,.92),rgba(8,9,10,.94) 68%),radial-gradient(circle at 72% 24%,rgba(223,255,75,.18),transparent 29%); box-shadow:var(--shadow); }
+    .hero-stage:before { content:""; position:absolute; width:520px; height:520px; right:-235px; top:-195px; border:1px solid rgba(255,255,255,.24); border-radius:50%; box-shadow:0 0 0 38px rgba(255,255,255,.038),0 0 0 86px rgba(255,255,255,.024),0 0 0 142px rgba(255,255,255,.016); }
+    .hero-stage:after { content:""; position:absolute; inset:0; pointer-events:none; opacity:.35; background-image:linear-gradient(rgba(255,255,255,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.08) 1px,transparent 1px); background-size:42px 42px; mask-image:linear-gradient(120deg,transparent 0%,#000 40%,transparent 92%); }
+    .stage-label { position:absolute; left:27px; top:24px; z-index:1; color:var(--faint); font:11px ui-monospace,monospace; letter-spacing:.12em; }
+    .stage-grid { position:absolute; inset:78px 28px 27px; z-index:1; display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(3,1fr); gap:12px; }
+    .stage-node { position:relative; display:flex; align-items:center; justify-content:center; min-height:68px; border:1px solid rgba(255,255,255,.16); border-radius:12px; background:rgba(255,255,255,.045); color:#dbdcdd; font-size:12px; text-align:center; backdrop-filter:blur(8px); }
+    .stage-node:after { content:""; position:absolute; right:-13px; top:50%; width:12px; border-top:1px solid rgba(223,255,75,.66); }
+    .stage-node:nth-child(3n):after,.stage-node:last-child:after { display:none; }
+    .stage-node.accent { border-color:rgba(223,255,75,.72); color:var(--accent); background:rgba(223,255,75,.085); box-shadow:inset 0 0 22px rgba(223,255,75,.035); }
+    .stage-node small { display:block; color:var(--faint); font-size:9px; margin-top:2px; }
+    .signal-dot { position:absolute; left:28px; bottom:24px; width:6px; height:6px; z-index:2; border-radius:50%; background:var(--accent); box-shadow:0 0 18px var(--accent); }
+    .stage-status { position:absolute; right:27px; bottom:20px; z-index:2; color:var(--faint); font:10px ui-monospace,monospace; }
+    .metrics { display:grid; grid-template-columns:repeat(4,1fr); border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+    .metric { padding:20px 22px; border-right:1px solid var(--line); }
+    .metric:last-child { border-right:0; }
+    .metric strong { display:block; font-size:27px; font-weight:550; letter-spacing:-.06em; }
+    .metric span { color:var(--faint); font-size:11px; }
+    .section { padding:72px 0 16px; }
+    .section-head { display:flex; align-items:end; justify-content:space-between; gap:24px; margin-bottom:25px; }
+    h2 { margin:0; font-size:34px; font-weight:550; letter-spacing:-.065em; }
+    .section-head p { max-width:520px; margin:0; color:var(--muted); font-size:13px; }
+    .module-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:11px; }
+    .module { display:flex; min-height:136px; flex-direction:column; justify-content:space-between; padding:18px; border:1px solid var(--line); border-radius:16px; background:linear-gradient(145deg,rgba(255,255,255,.075),rgba(255,255,255,.022)); transition:.24s ease; }
+    .module:hover { transform:translateY(-4px); border-color:rgba(223,255,75,.62); background:linear-gradient(145deg,rgba(223,255,75,.11),rgba(255,255,255,.025)); box-shadow:0 16px 38px rgba(0,0,0,.18); }
+    .module-top { display:flex; align-items:start; justify-content:space-between; gap:10px; }
+    .module-num { color:var(--faint); font:10px ui-monospace,monospace; letter-spacing:.14em; }
+    .module-arrow { color:var(--accent); font-size:18px; line-height:1; }
+    .module h3 { margin:11px 0 4px; font-size:16px; font-weight:600; letter-spacing:-.035em; }
+    .module p { min-height:40px; margin:0; color:var(--muted); font-size:12px; }
+    .module-foot { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:14px; }
+    .chips { display:flex; flex-wrap:wrap; gap:5px; }
+    .chip { padding:3px 8px; color:#b6b8ba; border:1px solid var(--line); border-radius:99px; font-size:10px; }
+    .module-links { display:flex; gap:8px; }
+    .tiny-link { color:#cdd0d1; font-size:10px; text-decoration:none; }
+    .tiny-link:hover { color:var(--accent); }
+    .hardware-panel { display:grid; grid-template-columns:1.2fr .8fr; gap:11px; }
+    .hardware-main, .hardware-list { border:1px solid var(--line); border-radius:16px; background:linear-gradient(145deg,rgba(255,255,255,.055),rgba(255,255,255,.018)); }
+    .hardware-main { display:grid; grid-template-columns:220px 1fr; gap:19px; align-items:center; padding:15px; }
+    .hardware-main img { width:220px; height:156px; border-radius:11px; object-fit:cover; object-position:center; background:#070809; }
+    .hardware-main h3 { margin:0 0 5px; font-size:18px; font-weight:600; }
+    .hardware-main p { margin:0 0 13px; color:var(--muted); font-size:12px; }
+    .hardware-list { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:11px; }
+    .hardware-item { display:flex; min-height:61px; align-items:center; justify-content:space-between; gap:8px; padding:10px 11px; border:1px solid var(--line-soft); border-radius:10px; color:#d7d8d9; text-decoration:none; font-size:12px; transition:.2s ease; }
+    .hardware-item:hover { border-color:rgba(223,255,75,.58); color:var(--accent); background:rgba(223,255,75,.05); }
+    .hardware-item span { color:var(--faint); font-size:16px; }
+    .note { margin-top:13px; padding:13px 15px; border-left:2px solid var(--accent); color:var(--muted); background:rgba(223,255,75,.055); font-size:12px; }
+    footer { display:flex; justify-content:space-between; gap:20px; margin-top:72px; padding:27px 0 36px; border-top:1px solid var(--line); color:var(--faint); font-size:11px; }
+    footer a { color:#c7c8c9; text-decoration:none; }
+    @media (max-width:900px) { nav { display:none; } .hero { grid-template-columns:1fr; padding-top:48px; } .hero-stage { min-height:320px; } .module-grid { grid-template-columns:repeat(2,1fr); } .hardware-panel { grid-template-columns:1fr; } }
+    @media (max-width:600px) { .wrap { width:min(100% - 26px,1180px); } .top-actions .pill:first-child { display:none; } .hero { padding-bottom:44px; } h1 { font-size:52px; } .metrics { grid-template-columns:repeat(2,1fr); } .metric:nth-child(2) { border-right:0; } .metric:nth-child(-n+2) { border-bottom:1px solid var(--line); } .section-head { display:block; } .section-head p { margin-top:8px; } .module-grid { grid-template-columns:1fr; } .hardware-main { grid-template-columns:1fr; } .hardware-main img { width:100%; height:180px; } footer { display:block; } footer span { display:block; margin-top:7px; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap" style="display:flex;align-items:center;justify-content:space-between;width:100%;">
+      <a class="brand" href="#top" aria-label="ApexFly V2.0 首页"><span class="brand-mark">✦</span><span>ApexFly V2.0<small>flight-control workspace</small></span></a>
+      <nav aria-label="主导航"><a href="#maps">架构图</a><a href="#hardware">飞控硬件</a><a href="#system">系统边界</a><a href="diagrams/README.md">图纸索引 ↗</a></nav>
+      <div class="top-actions"><a class="pill" href="diagrams/README.md">六张图 ↗</a><a class="pill light" href="https://github.com/Nyxarian/ApexFly-v2.0">GitHub ↗</a></div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="wrap hero">
+      <div>
+        <div class="eyebrow">Embedded flight-control engineering</div>
+        <h1>把飞控系统<br><em>讲清楚。</em></h1>
+        <p class="lead">ApexFly V2.0 是一套以 STM32G474 为核心的自写四轴飞控系统。用小模块快速进入架构图、硬件资料和源码证据，不再让大图占满页面。</p>
+        <div class="hero-actions"><a class="pill lime" href="#maps">浏览架构模块 ↓</a><a class="pill" href="#hardware">查看飞控硬件</a></div>
+      </div>
+      <div class="hero-stage" aria-label="ApexFly 控制链路摘要">
+        <div class="stage-label">SYSTEM / CONTROL PATH</div>
+        <div class="stage-grid">
+          <div class="stage-node">IMU<small>sensor input</small></div><div class="stage-node">ESTIMATE<small>Mahony / height</small></div><div class="stage-node accent">PID<small>control core</small></div>
+          <div class="stage-node">LoRa<small>command link</small></div><div class="stage-node accent">MIXER<small>four motors</small></div><div class="stage-node">PWM<small>TIM8 output</small></div>
+          <div class="stage-node">GPS / FLOW<small>position</small></div><div class="stage-node">W25Q64<small>blackbox</small></div><div class="stage-node accent">SAFE<small>failsafe</small></div>
+        </div>
+        <span class="signal-dot"></span><span class="stage-status">FC: STM32G474VCT6 · RTOS: FreeRTOS</span>
+      </div>
+    </section>
+
+    <section class="wrap metrics" aria-label="工程摘要"><div class="metric"><strong>6</strong><span>架构模块</span></div><div class="metric"><strong>2</strong><span>MCU 节点</span></div><div class="metric"><strong>39</strong><span>协议参数</span></div><div class="metric"><strong>64 B</strong><span>黑匣子记录</span></div></section>
+
+    <section class="wrap section" id="maps" aria-labelledby="maps-title">
+      <div class="section-head"><div><div class="eyebrow">Architecture library / 06</div><h2 id="maps-title">架构图模块</h2></div><p>每个模块都是一个入口。点标题看交互版，点格式下载静态文件。</p></div>
+      <div class="module-grid">
+        <article class="module"><a class="module-top" href="diagrams/system-architecture.html" style="text-decoration:none"><span class="module-num">01 · SYSTEM</span><span class="module-arrow">↗</span></a><h3>系统总体架构</h3><p>遥控器、LoRa、飞控、传感器、Flash 与电机。</p><div class="module-foot"><div class="chips"><span class="chip">STM32G474</span><span class="chip">LoRa</span></div><div class="module-links"><a class="tiny-link" href="diagrams/system-architecture.svg">SVG</a><a class="tiny-link" href="diagrams/system-architecture.png">PNG</a></div></div></article>
+        <article class="module"><a class="module-top" href="diagrams/software-layers.html" style="text-decoration:none"><span class="module-num">02 · SOFTWARE</span><span class="module-arrow">↗</span></a><h3>软件分层架构</h3><p>硬件、RTOS、驱动、通信、估计、控制和应用。</p><div class="module-foot"><div class="chips"><span class="chip">FreeRTOS</span><span class="chip">PID</span></div><div class="module-links"><a class="tiny-link" href="diagrams/software-layers.svg">SVG</a><a class="tiny-link" href="diagrams/software-layers.png">PNG</a></div></div></article>
+        <article class="module"><a class="module-top" href="diagrams/realtime-control.html" style="text-decoration:none"><span class="module-num">03 · CONTROL LOOP</span><span class="module-arrow">↗</span></a><h3>实时控制数据流</h3><p>采样、估计、PID、混控、PWM 与实时旁路。</p><div class="module-foot"><div class="chips"><span class="chip">Mahony</span><span class="chip">PWM</span></div><div class="module-links"><a class="tiny-link" href="diagrams/realtime-control.svg">SVG</a><a class="tiny-link" href="diagrams/realtime-control.png">PNG</a></div></div></article>
+        <article class="module"><a class="module-top" href="diagrams/lifecycle-flight-safety.html" style="text-decoration:none"><span class="module-num">04 · SAFETY</span><span class="module-arrow">↗</span></a><h3>飞行状态机与故障保护</h3><p>解锁、飞行、失联、IMU/高度故障与保护下降。</p><div class="module-foot"><div class="chips"><span class="chip">Failsafe</span><span class="chip">1500 ms</span></div><div class="module-links"><a class="tiny-link" href="diagrams/lifecycle-flight-safety.svg">SVG</a><a class="tiny-link" href="diagrams/lifecycle-flight-safety.png">PNG</a></div></div></article>
+        <article class="module"><a class="module-top" href="diagrams/lora-communication.html" style="text-decoration:none"><span class="module-num">05 · LINK</span><span class="module-arrow">↗</span></a><h3>LoRa 通信时序</h3><p>控制帧、遥测、PID 参数、CRC16、ACK 与超时。</p><div class="module-foot"><div class="chips"><span class="chip">A5 5A</span><span class="chip">39 params</span></div><div class="module-links"><a class="tiny-link" href="diagrams/lora-communication.svg">SVG</a><a class="tiny-link" href="diagrams/lora-communication.png">PNG</a></div></div></article>
+        <article class="module"><a class="module-top" href="diagrams/blackbox-logs.html" style="text-decoration:none"><span class="module-num">06 · TELEMETRY</span><span class="module-arrow">↗</span></a><h3>黑匣子与日志数据流</h3><p>样本、队列、64 B 记录、W25Q64 与 CSV 分析。</p><div class="module-foot"><div class="chips"><span class="chip">W25Q64</span><span class="chip">CRC16</span></div><div class="module-links"><a class="tiny-link" href="diagrams/blackbox-logs.svg">SVG</a><a class="tiny-link" href="diagrams/blackbox-logs.png">PNG</a></div></div></article>
+      </div>
+    </section>
+
+    <section class="wrap section" id="hardware" aria-labelledby="hardware-title">
+      <div class="section-head"><div><div class="eyebrow">Physical hardware / flight controller</div><h2 id="hardware-title">飞控主板</h2></div><p>用小入口查看真实板卡、PCB 层和原理图，不在首页铺开整张大图。</p></div>
+      <div class="hardware-panel">
+        <div class="hardware-main"><a href="hardware/flight-controller/flight-controller-3d-front.png"><img src="hardware/flight-controller/flight-controller-3d-front.png" alt="ApexFly 飞控主板 3D 正面" loading="lazy"></a><div><h3>STM32G474 Flight Controller</h3><p>主控、四路电机接口、传感器、LoRa、GPS、PWM 与调试接口集中在同一块板卡上。</p><div class="chips"><span class="chip">STM32G474VCT6</span><span class="chip">M1–M4</span><span class="chip">LoRa</span></div></div></div>
+        <div class="hardware-list"><a class="hardware-item" href="hardware/flight-controller/flight-controller-3d-front.png">3D 正面 <span>↗</span></a><a class="hardware-item" href="hardware/flight-controller/flight-controller-3d-back.png">3D 背面 <span>↗</span></a><a class="hardware-item" href="hardware/flight-controller/flight-controller-pcb-top.png">PCB 顶面 <span>↗</span></a><a class="hardware-item" href="hardware/flight-controller/flight-controller-pcb-bottom.png">PCB 底面 <span>↗</span></a><a class="hardware-item" href="hardware/flight-controller/flight-controller-pcb-inner.png">PCB 内层 <span>↗</span></a><a class="hardware-item" href="hardware/flight-controller/flight-controller-schematic.svg">原理图 SVG <span>↗</span></a><a class="hardware-item" href="hardware/flight-controller/flight-controller-schematic.pdf">原理图 PDF <span>↗</span></a><a class="hardware-item" href="hardware/flight-controller/README.md">资料说明 <span>↗</span></a></div>
+      </div>
+      <div class="note"><strong>展示边界：</strong>当前只加入飞控主板；遥控器板卡资料后续单独增加。图纸依据代码与 PCB 资料静态整理，实机验证仍以硬件验收为准。</div>
+    </section>
+
+    <section class="wrap section" id="system" aria-labelledby="system-title">
+      <div class="section-head"><div><div class="eyebrow">System boundary</div><h2 id="system-title">两块板，三条主线</h2></div><p>遥控端、飞控端和工程工具共同组成完整链路。</p></div>
+      <div class="module-grid"><article class="module"><div class="module-num">FLIGHT CONTROLLER</div><h3>飞控端 · STM32G474VCT6</h3><p>传感器采集、状态估计、控制输出、故障保护和机载日志。</p><div class="chips"><span class="chip">FreeRTOS</span><span class="chip">TIM8 PWM</span><span class="chip">W25Q64</span></div></article><article class="module"><div class="module-num">REMOTE CONTROLLER</div><h3>遥控端 · STM32F407</h3><p>LVGL 交互、控制指令、参数管理、遥测显示和诊断页面。</p><div class="chips"><span class="chip">LVGL</span><span class="chip">ADC</span><span class="chip">LoRa</span></div></article><article class="module"><div class="module-num">EVIDENCE</div><h3>工程证据</h3><p>架构图与源码路径/行号对应；源码、图纸和实机验证边界清楚。</p><div class="chips"><span class="chip">source trace</span><span class="chip">static docs</span></div></article></div>
+    </section>
+  </main>
+
+  <footer class="wrap"><span>ApexFly V2.0 · Embedded flight-control engineering workspace</span><span><a href="diagrams/README.md">查看全部图纸</a> · <a href="hardware/flight-controller/README.md">查看硬件资料</a></span></footer>
+</body>
+</html>

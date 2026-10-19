@@ -1,0 +1,245 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg viewBox="0 0 920 860" data-sequence-column-fit="spread" data-reader-fit="intrinsic-height" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="signal-flow" data-quality-profile="showcase">
+        <title id="archify-diagram-title">ApexFly LoRa 通信时序</title>
+        <desc id="archify-diagram-description">控制帧、遥测回包、39 项 PID 参数操作，以及 CRC / TX_DONE / 超时恢复</desc>
+        
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" fill="#64748b" />
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" fill="#34d399" />
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" fill="#fb7185" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" fill="#a78bfa" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5" />
+          </pattern>
+        </defs>
+
+        
+        <rect width="100%" height="100%" fill="#020617" />
+
+        
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="0" x="48" y="160" width="824" height="140" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="1" x="48" y="340" width="824" height="130" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="segment" data-composition-frame-id="2" x="48" y="510" width="824" height="210" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+
+        
+        <path d="M 157 142 L 157 764" class="a-default" stroke-width="0.8" stroke-dasharray="3,7" stroke="#64748b" fill="none" />
+        <path d="M 471 142 L 471 764" class="a-default" stroke-width="0.8" stroke-dasharray="3,7" stroke="#64748b" fill="none" />
+        <path d="M 785 142 L 785 764" class="a-default" stroke-width="0.8" stroke-dasharray="3,7" stroke="#64748b" fill="none" />
+
+        
+        <rect x="152" y="160" width="10" height="320" rx="3" class="c-mask" fill="#0f172a" />
+        <rect x="152" y="160" width="10" height="320" rx="3" class="c-external" stroke-width="1" fill="#101725" stroke="#94a3b8" />
+        <rect x="466" y="180" width="10" height="120" rx="3" class="c-mask" fill="#0f172a" />
+        <rect x="466" y="180" width="10" height="120" rx="3" class="c-messagebus" stroke-width="1" fill="#4b331f" stroke="#fb923c" />
+        <rect x="780" y="220" width="10" height="40" rx="3" class="c-mask" fill="#0f172a" />
+        <rect x="780" y="220" width="10" height="40" rx="3" class="c-backend" stroke-width="1" fill="#073c2f" stroke="#34d399" />
+        <rect x="466" y="360" width="10" height="120" rx="3" class="c-mask" fill="#0f172a" />
+        <rect x="466" y="360" width="10" height="120" rx="3" class="c-messagebus" stroke-width="1" fill="#4b331f" stroke="#fb923c" />
+        <rect x="780" y="400" width="10" height="40" rx="3" class="c-mask" fill="#0f172a" />
+        <rect x="780" y="400" width="10" height="40" rx="3" class="c-backend" stroke-width="1" fill="#073c2f" stroke="#34d399" />
+
+        
+        <g data-edge-from="remote" data-edge-to="lora" data-edge-label="发送 CONTROL · seq + 摇杆/模式/解锁" data-edge-key="0" data-edge-id="control-tx">
+          <path data-composition-edge-from="remote" data-composition-edge-to="lora" data-composition-edge-id="control-tx" data-composition-points="164,180;464,180" d="M 164 180 L 464 180" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <g data-detail="context">
+          <rect x="192.5" y="160" width="243" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="314" y="170" class="t-edge-emphasis" font-size="11" text-anchor="middle" fill="#34d399">发送 CONTROL · seq + 摇杆/模式/解锁</text>
+        </g>
+        <text data-detail="fine" x="176" y="198" class="t-dim" font-size="7" fill="#cbd5e1">App_Radio_Task.c:199-221；协议头 A5 5A，控制 payload 10B。</text>
+        </g>
+
+        <g data-edge-from="lora" data-edge-to="flight" data-edge-label="RX_DONE → DecodeFrame + CRC16" data-edge-key="1" data-edge-id="control-rx">
+          <path data-composition-edge-from="lora" data-composition-edge-to="flight" data-composition-edge-id="control-rx" data-composition-points="478,220;778,220" d="M 478 220 L 778 220" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <g data-detail="context">
+          <rect x="526.3" y="200" width="203.39999999999998" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="628" y="210" class="t-muted" font-size="11" text-anchor="middle" fill="#94a3b8">RX_DONE → DecodeFrame + CRC16</text>
+        </g>
+        <text data-detail="fine" x="490" y="238" class="t-dim" font-size="7" fill="#cbd5e1">radio.c:203-221, 241-257；坏帧记录 rejected 后重新接收。</text>
+        </g>
+
+        <g data-edge-from="flight" data-edge-to="lora" data-edge-label="发送 TELEMETRY · 同 seq + 状态/电量/GPS" data-edge-key="2" data-edge-id="telemetry-tx">
+          <path data-composition-edge-from="flight" data-composition-edge-to="lora" data-composition-edge-id="telemetry-tx" data-composition-points="778,260;478,260" d="M 778 260 L 478 260" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <g data-detail="context">
+          <rect x="493.3" y="240" width="269.4" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="628" y="250" class="t-muted" font-size="11" text-anchor="middle" fill="#94a3b8">发送 TELEMETRY · 同 seq + 状态/电量/GPS</text>
+        </g>
+        <text data-detail="fine" x="490" y="278" class="t-dim" font-size="7" fill="#cbd5e1">radio.c:134-186；遥测 payload 31B。</text>
+        </g>
+
+        <g data-edge-from="lora" data-edge-to="remote" data-edge-label="RX_DONE → 更新遥测快照" data-edge-key="3" data-edge-id="telemetry-rx">
+          <path data-composition-edge-from="lora" data-composition-edge-to="remote" data-composition-edge-id="telemetry-rx" data-composition-points="464,320;164,320" d="M 464 320 L 164 320" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <g data-detail="context">
+          <rect x="235.4" y="300" width="157.2" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="314" y="310" class="t-muted" font-size="11" text-anchor="middle" fill="#94a3b8">RX_DONE → 更新遥测快照</text>
+        </g>
+        <text data-detail="fine" x="176" y="338" class="t-dim" font-size="7" fill="#cbd5e1">App_Radio_Task.c:270-332；RemoteLink_OnTelemetry 更新连接状态。</text>
+        </g>
+
+        <g data-edge-from="remote" data-edge-to="lora" data-edge-label="发送 PID_COMMAND · GET / SET / SAVE" data-edge-key="4" data-edge-id="pid-command">
+          <path data-composition-edge-from="remote" data-composition-edge-to="lora" data-composition-edge-id="pid-command" data-composition-points="164,360;464,360" d="M 164 360 L 464 360" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <g data-detail="context">
+          <rect x="192.5" y="340" width="243" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="314" y="350" class="t-edge-emphasis" font-size="11" text-anchor="middle" fill="#34d399">发送 PID_COMMAND · GET / SET / SAVE</text>
+        </g>
+        <text data-detail="fine" x="176" y="378" class="t-dim" font-size="7" fill="#cbd5e1">App_Radio_Task.c:227-264；UI 请求使用单槽 pending 命令。</text>
+        </g>
+
+        <g data-edge-from="lora" data-edge-to="flight" data-edge-label="RX_DONE → DecodePidCommand" data-edge-key="5" data-edge-id="pid-decode">
+          <path data-composition-edge-from="lora" data-composition-edge-to="flight" data-composition-edge-id="pid-decode" data-composition-points="478,400;778,400" d="M 478 400 L 778 400" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <g data-detail="context">
+          <rect x="536.2" y="380" width="183.6" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="628" y="390" class="t-muted" font-size="11" text-anchor="middle" fill="#94a3b8">RX_DONE → DecodePidCommand</text>
+        </g>
+        <text data-detail="fine" x="490" y="418" class="t-dim" font-size="7" fill="#cbd5e1">radio.c:224-238；随后交给 PidTable_HandleCommand。</text>
+        </g>
+
+        <g data-edge-from="flight" data-edge-to="lora" data-edge-label="PID_RESPONSE · status + 全部 39 项参数" data-edge-key="6" data-edge-id="pid-response">
+          <path data-composition-edge-from="flight" data-composition-edge-to="lora" data-composition-edge-id="pid-response" data-composition-points="778,440;478,440" d="M 778 440 L 478 440" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <g data-detail="context">
+          <rect x="496.6" y="420" width="262.79999999999995" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="628" y="430" class="t-muted" font-size="11" text-anchor="middle" fill="#94a3b8">PID_RESPONSE · status + 全部 39 项参数</text>
+        </g>
+        <text data-detail="fine" x="490" y="458" class="t-dim" font-size="7" fill="#cbd5e1">apex_protocol.h:43-49, 94-120；radio.c:189-200。</text>
+        </g>
+
+        <g data-edge-from="lora" data-edge-to="remote" data-edge-label="RX_DONE → 更新 PID 页面" data-edge-key="7" data-edge-id="pid-received">
+          <path data-composition-edge-from="lora" data-composition-edge-to="remote" data-composition-edge-id="pid-received" data-composition-points="464,480;164,480" d="M 464 480 L 164 480" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <g data-detail="context">
+          <rect x="232.10000000000002" y="460" width="163.79999999999998" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="314" y="470" class="t-muted" font-size="11" text-anchor="middle" fill="#94a3b8">RX_DONE → 更新 PID 页面</text>
+        </g>
+        <text data-detail="fine" x="176" y="498" class="t-dim" font-size="7" fill="#cbd5e1">App_Radio_Task.c:296-309；收到后清除 PID reply deadline。</text>
+        </g>
+
+        <g data-edge-from="lora" data-edge-to="remote" data-edge-label="TX_DONE → 重新进入 RX" data-edge-key="8" data-edge-id="tx-done">
+          <path data-composition-edge-from="lora" data-composition-edge-to="remote" data-composition-edge-id="tx-done" data-composition-points="464,540;164,540" d="M 464 540 L 164 540" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <g data-detail="context">
+          <rect x="238.7" y="520" width="150.6" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="314" y="530" class="t-muted" font-size="11" text-anchor="middle" fill="#94a3b8">TX_DONE → 重新进入 RX</text>
+        </g>
+        <text data-detail="fine" x="176" y="558" class="t-dim" font-size="7" fill="#cbd5e1">DIO1 只是本端无线事件，不是对端 ACK。</text>
+        </g>
+
+        <g data-edge-from="lora" data-edge-to="remote" data-edge-label="CRC / header error → 丢帧并重进 RX" data-edge-key="9" data-edge-id="crc-error">
+          <path data-composition-edge-from="lora" data-composition-edge-to="remote" data-composition-edge-id="crc-error" data-composition-points="464,590;164,590" d="M 464 590 L 164 590" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)" stroke="#fb7185" fill="none" stroke-dasharray="5,5" />
+        <g data-detail="context">
+          <rect x="195.8" y="570" width="236.39999999999998" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="314" y="580" class="t-edge-security" font-size="11" text-anchor="middle">CRC / header error → 丢帧并重进 RX</text>
+        </g>
+        <text data-detail="fine" x="176" y="608" class="t-dim" font-size="7" fill="#cbd5e1">App_Radio_Task.c:355-359；飞控端同样在 radio.c:273-277 重新接收。</text>
+        </g>
+
+        <g data-edge-from="remote" data-edge-to="lora" data-edge-label="PID 回包等待窗口 · 600ms 内暂停控制帧" data-edge-key="10" data-edge-id="pid-wait">
+          <path data-composition-edge-from="remote" data-composition-edge-to="lora" data-composition-edge-id="pid-wait" data-composition-points="164,640;464,640" d="M 164 640 L 464 640" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)" stroke="#a78bfa" fill="none" stroke-dasharray="4,4" />
+        <g data-detail="context">
+          <rect x="185.9" y="620" width="256.2" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="314" y="630" class="t-edge-dashed" font-size="11" text-anchor="middle" fill="#a78bfa">PID 回包等待窗口 · 600ms 内暂停控制帧</text>
+        </g>
+        <text data-detail="fine" x="176" y="658" class="t-dim" font-size="7" fill="#cbd5e1">App_Radio_Task.c:36-37, 436-449；防止长 PID 回包撞上控制帧。</text>
+        </g>
+
+        <g data-edge-from="remote" data-edge-to="lora" data-edge-label="TX guard &gt; 4000ms → 退出任务循环并恢复模块" data-edge-key="11" data-edge-id="tx-guard">
+          <path data-composition-edge-from="remote" data-composition-edge-to="lora" data-composition-edge-id="tx-guard" data-composition-points="164,690;464,690" d="M 164 690 L 464 690" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)" stroke="#fb7185" fill="none" stroke-dasharray="5,5" />
+        <g data-detail="context">
+          <rect x="169.4" y="670" width="289.2" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="314" y="680" class="t-edge-security" font-size="11" text-anchor="middle">TX guard &gt; 4000ms → 退出任务循环并恢复模块</text>
+        </g>
+        <text data-detail="fine" x="176" y="708" class="t-dim" font-size="7" fill="#cbd5e1">App_Radio_Task.c:33-34, 462-496；飞控端 radio.c:331-355 采用同类 TX guard。</text>
+        </g>
+
+        <g data-edge-from="flight" data-edge-to="remote" data-edge-label="遥测超时 &gt; 1000ms → aircraft_connected=false" data-edge-key="12" data-edge-id="link-timeout">
+          <path data-composition-edge-from="flight" data-composition-edge-to="remote" data-composition-edge-id="link-timeout" data-composition-points="778,740;164,740" d="M 778 740 L 164 740" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)" stroke="#fb7185" fill="none" stroke-dasharray="5,5" />
+        <g data-detail="context">
+          <rect x="319.8" y="720" width="302.4" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="471" y="730" class="t-edge-security" font-size="11" text-anchor="middle">遥测超时 &gt; 1000ms → aircraft_connected=false</text>
+        </g>
+        <text data-detail="fine" x="176" y="758" class="t-dim" font-size="7" fill="#cbd5e1">remote_link.c:101-120；同时清除 armed 与 arm_requested。</text>
+        </g>
+
+        
+        <g data-graph-role="segment-label" data-segment-id="0">
+          <rect x="56" y="138" width="180.4" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="62" y="151" class="t-dim" font-size="9" font-weight="600" fill="#cbd5e1">控制 ↔ 遥测往返 · 100ms 控制周期</text>
+        </g>
+        <g data-graph-role="segment-label" data-segment-id="1">
+          <rect x="56" y="296" width="175.20000000000002" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="62" y="309" class="t-dim" font-size="9" font-weight="600" fill="#cbd5e1">PID 参数操作 · GET / SET / SAVE</text>
+        </g>
+        <g data-graph-role="segment-label" data-segment-id="2">
+          <rect x="56" y="488" width="196" height="18" rx="3" class="c-mask" fill="#0f172a" />
+          <text x="62" y="501" class="t-dim" font-size="9" font-weight="600" fill="#cbd5e1">链路保护 · CRC / TX_DONE / 超时恢复</text>
+        </g>
+
+        
+        <g id="node-remote" data-node-id="remote" data-node-label="CoreFly F2 Remoto" tabindex="0" role="button" aria-label="聚焦CoreFly F2 Remoto，STM32F407 · App_Radio_Task, 时序参与者" aria-pressed="false" data-node-kind="external" data-node-sublabel="STM32F407 · App_Radio_Task" data-node-context="时序参与者">
+          <title>CoreFly F2 Remoto · STM32F407 · App_Radio_Task · 时序参与者</title>
+          <rect x="62" y="72" width="190" height="60" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="62" y="72" width="190" height="60" rx="6" class="c-external" stroke-width="1.5" fill="#101725" stroke="#94a3b8" />
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(68 78) scale(0.6875)" color="#94a3b8" stroke="#94a3b8">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5" />
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="157" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle" fill="#ffffff">CoreFly F2 Remoto</text>
+          <text data-detail="context" x="157" y="122" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">STM32F407 · App_Radio_Task</text>
+        </g>
+
+        <g id="node-lora" data-node-id="lora" data-node-label="LoRa RA-01SC" tabindex="0" role="button" aria-label="聚焦LoRa RA-01SC，DIO1 · RX_DONE · TX_DONE, 时序参与者" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="DIO1 · RX_DONE · TX_DONE" data-node-context="时序参与者">
+          <title>LoRa RA-01SC · DIO1 · RX_DONE · TX_DONE · 时序参与者</title>
+          <rect x="376" y="72" width="190" height="60" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="376" y="72" width="190" height="60" rx="6" class="c-messagebus" stroke-width="1.5" fill="#4b331f" stroke="#fb923c" />
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(382 78) scale(0.6875)" color="#fb923c" stroke="#fb923c">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="471" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle" fill="#ffffff">LoRa RA-01SC</text>
+          <text data-detail="context" x="471" y="122" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">DIO1 · RX_DONE · TX_DONE</text>
+        </g>
+
+        <g id="node-flight" data-node-id="flight" data-node-label="ApexFly STM32G474" tabindex="0" role="button" aria-label="聚焦ApexFly STM32G474，Radio_Task · ControlLink · PidTable, 时序参与者" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Radio_Task · ControlLink · PidTable" data-node-context="时序参与者">
+          <title>ApexFly STM32G474 · Radio_Task · ControlLink · PidTable · 时序参与者</title>
+          <rect x="690" y="72" width="190" height="60" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="690" y="72" width="190" height="60" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(696 78) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="785" y="108" class="t-primary" font-size="11" font-weight="600" text-anchor="middle" fill="#ffffff">ApexFly STM32G474</text>
+          <text data-detail="context" x="785" y="122" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">Radio_Task · ControlLink · PidTable</text>
+        </g>
+
+        
+        <g data-legend="">
+          <text x="40" y="786" class="t-primary" font-size="12" font-weight="650" fill="#ffffff">图例</text>
+          <g data-legend-semantic-kind="emphasis" data-legend-x="40" data-legend-baseline="806" data-legend-width="118">
+            <path d="M 40 803 L 74 803" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+            <text x="83" y="806" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">控制 / 关键回包</text>
+          </g>
+          <g data-legend-semantic-kind="return" data-legend-x="180" data-legend-baseline="806" data-legend-width="98">
+            <path d="M 180 803 L 214 803" class="a-default" stroke-width="1.4" stroke-dasharray="3,5" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+            <text x="223" y="806" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">返回 / 遥测</text>
+          </g>
+          <g data-legend-semantic-kind="security" data-legend-x="300" data-legend-baseline="806" data-legend-width="98">
+            <path d="M 300 803 L 334 803" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)" stroke="#fb7185" fill="none" stroke-dasharray="5,5" />
+            <text x="343" y="806" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">错误 / 保护</text>
+          </g>
+          <g data-legend-semantic-kind="dashed" data-legend-x="420" data-legend-baseline="806" data-legend-width="98">
+            <path d="M 420 803 L 454 803" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)" stroke="#a78bfa" fill="none" stroke-dasharray="4,4" />
+            <text x="463" y="806" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">等待 / 节流</text>
+          </g>
+          <g data-legend-semantic-kind="default" data-legend-x="540" data-legend-baseline="806" data-legend-width="83">
+            <path d="M 540 803 L 574 803" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+            <text x="583" y="806" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">普通消息</text>
+          </g>
+        </g>
+      </svg>

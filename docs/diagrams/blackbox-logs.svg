@@ -1,0 +1,202 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg viewBox="0 0 940 720" data-reader-fit="intrinsic-height" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="signal-flow" data-quality-profile="showcase">
+        <title id="archify-diagram-title">ApexFly 黑匣子与日志数据流</title>
+        <desc id="archify-diagram-description">控制状态采样 → 64 B 固定记录 → W25Q64 环形日志 → USART3 导出 → C# 波形分析</desc>
+        
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" fill="#64748b" />
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" fill="#34d399" />
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" fill="#fb7185" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" fill="#a78bfa" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5" />
+          </pattern>
+        </defs>
+
+        
+        <rect width="100%" height="100%" fill="#020617" />
+
+        
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="0" x="16" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle" fill="#cbd5e1">01 / 运行时采样</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="1" x="231" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle" fill="#cbd5e1">02 / 异步排队与编码</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="2" x="446" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle" fill="#cbd5e1">03 / Flash 持久化</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="3" x="661" y="46" width="168" height="600" rx="10" class="c-lane" stroke-width="1" fill="#0b1220" stroke="#334155" />
+        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle" fill="#cbd5e1">04 / 导出与分析</text>
+
+        
+        <path data-edge-from="control-state" data-edge-to="job-queue" data-edge-label="分频后入队" data-edge-key="0" data-edge-id="control-submit" data-composition-points="175,157;259,157" d="M 175 157 L 259 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="job-queue" data-edge-to="record-builder" data-edge-label="Blackbox_Task 取出 Job" data-edge-key="1" data-edge-id="queue-dequeue" data-composition-points="315,186;315,356" d="M 315 186 L 315 356" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <path data-edge-from="record-builder" data-edge-to="w25q64-log" data-edge-label="写入 64 B · 校验 CRC16" data-edge-key="2" data-edge-id="record-write" data-composition-points="379,385;422.5,385;422.5,271;466,271" d="M 379 385 L 422.5 385 L 422.5 271 L 466 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="w25q64-log" data-edge-to="serial-dump" data-edge-label="dump [N] / dumpall [N]" data-edge-key="3" data-edge-id="flash-dump" data-composition-points="594,271;639.5,271;639.5,157;685,157" d="M 594 271 L 639.5 271 L 639.5 157 L 685 157" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+        <path data-edge-from="serial-dump" data-edge-to="csharp-reader" data-edge-label="串口文本 → 场次文件" data-edge-key="4" data-edge-id="serial-parse" data-composition-points="745,186;745,356" d="M 745 186 L 745 356" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+        <path data-edge-from="csharp-reader" data-edge-to="waveform-analysis" data-edge-label="CSV + PID → 波形" data-edge-key="5" data-edge-id="reader-waveform" data-composition-points="745,414;745,584" d="M 745 414 L 745 584" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+
+        
+        <g id="node-control-state" data-node-id="control-state" data-node-label="运行时样本" tabindex="0" role="button" aria-label="聚焦运行时样本，姿态 / 电机 / 高度 / 光流, 01 / 运行时采样" aria-pressed="false" data-node-kind="backend" data-node-sublabel="姿态 / 电机 / 高度 / 光流" data-node-tag="Motor_Task · Flow_Task" data-node-context="01 / 运行时采样">
+          <title>运行时样本 · 姿态 / 电机 / 高度 / 光流 · 01 / 运行时采样 · Motor_Task · Flow_Task</title>
+          <rect x="25" y="128" width="150" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="25" y="128" width="150" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(31 134) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="100" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">运行时样本</text>
+          <text data-detail="context" x="100" y="165" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">姿态 / 电机 / 高度 / 光流</text>
+        <text data-detail="fine" x="100" y="175" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">Motor_Task · Flow_Task</text>
+        </g>
+
+        <g id="node-job-queue" data-node-id="job-queue" data-node-label="Blackbox Job Queue" tabindex="0" role="button" aria-label="聚焦Blackbox Job Queue，FreeRTOS 静态队列 · 32 槽, 02 / 异步排队与编码" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="FreeRTOS 静态队列 · 32 槽" data-node-tag="非阻塞提交" data-node-context="02 / 异步排队与编码">
+          <title>Blackbox Job Queue · FreeRTOS 静态队列 · 32 槽 · 02 / 异步排队与编码 · 非阻塞提交</title>
+          <rect x="259" y="128" width="112" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="259" y="128" width="112" height="58" rx="6" class="c-messagebus" stroke-width="1.5" fill="#4b331f" stroke="#fb923c" />
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(265 134) scale(0.6875)" color="#fb923c" stroke="#fb923c">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="315" y="158.6" class="t-primary" font-size="9.6" font-weight="600" text-anchor="middle" fill="#ffffff">Blackbox Job Queue</text>
+          <text data-detail="context" x="315" y="169.4" class="t-muted" font-size="6.9" text-anchor="middle" fill="#94a3b8">FreeRTOS 静态队列 · 32 槽</text>
+        <text data-detail="fine" x="315" y="179.5" class="t-messagebus" font-size="7" text-anchor="middle" fill="#fb923c">非阻塞提交</text>
+        </g>
+
+        <g id="node-record-builder" data-node-id="record-builder" data-node-label="64 B 记录编码" tabindex="0" role="button" aria-label="聚焦64 B 记录编码，64 B · CRC16, 02 / 异步排队与编码" aria-pressed="false" data-node-kind="backend" data-node-sublabel="64 B · CRC16" data-node-tag="Session / Sample / Pos" data-node-context="02 / 异步排队与编码">
+          <title>64 B 记录编码 · 64 B · CRC16 · 02 / 异步排队与编码 · Session / Sample / Pos</title>
+          <rect x="251" y="356" width="128" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="251" y="356" width="128" height="58" rx="6" class="c-backend" stroke-width="1.5" fill="#073c2f" stroke="#34d399" />
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(257 362) scale(0.6875)" color="#34d399" stroke="#34d399">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="315" y="387" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">64 B 记录编码</text>
+          <text data-detail="context" x="315" y="398" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">64 B · CRC16</text>
+        <text data-detail="fine" x="315" y="408.1" class="t-backend" font-size="7" text-anchor="middle" fill="#34d399">Session / Sample / Pos</text>
+        </g>
+
+        <g id="node-w25q64-log" data-node-id="w25q64-log" data-node-label="W25Q64 日志区" tabindex="0" role="button" aria-label="聚焦W25Q64 日志区，0x004000 · 环形覆盖, 03 / Flash 持久化" aria-pressed="false" data-node-kind="database" data-node-sublabel="0x004000 · 环形覆盖" data-node-tag="日志存储" data-node-context="03 / Flash 持久化">
+          <title>W25Q64 日志区 · 0x004000 · 环形覆盖 · 03 / Flash 持久化 · 日志存储</title>
+          <rect x="466" y="242" width="128" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="466" y="242" width="128" height="58" rx="6" class="c-database" stroke-width="1.5" fill="#21154e" stroke="#a78bfa" />
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(472 248) scale(0.6875)" color="#a78bfa" stroke="#a78bfa">
+            <ellipse cx="8" cy="4" rx="5" ry="2" />
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="530" y="273" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">W25Q64 日志区</text>
+          <text data-detail="context" x="530" y="284" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">0x004000 · 环形覆盖</text>
+        <text data-detail="fine" x="530" y="294.1" class="t-database" font-size="7" text-anchor="middle" fill="#a78bfa">日志存储</text>
+        </g>
+
+        <g id="node-serial-dump" data-node-id="serial-dump" data-node-label="USART3 导出" tabindex="0" role="button" aria-label="聚焦USART3 导出，CSV / 64B hex, 04 / 导出与分析" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="CSV / 64B hex" data-node-tag="dump / dumpall" data-node-context="04 / 导出与分析">
+          <title>USART3 导出 · CSV / 64B hex · 04 / 导出与分析 · dump / dumpall</title>
+          <rect x="685" y="128" width="120" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="685" y="128" width="120" height="58" rx="6" class="c-messagebus" stroke-width="1.5" fill="#4b331f" stroke="#fb923c" />
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(691 134) scale(0.6875)" color="#fb923c" stroke="#fb923c">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill" fill="#94a3b8" stroke="none" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="745" y="159" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">USART3 导出</text>
+          <text data-detail="context" x="745" y="170" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">CSV / 64B hex</text>
+        <text data-detail="fine" x="745" y="180.1" class="t-messagebus" font-size="7" text-anchor="middle" fill="#fb923c">dump / dumpall</text>
+        </g>
+
+        <g id="node-csharp-reader" data-node-id="csharp-reader" data-node-label="C# Reader" tabindex="0" role="button" aria-label="聚焦C# Reader，CSV + PID, 04 / 导出与分析" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="CSV + PID" data-node-tag="BlackboxReader" data-node-context="04 / 导出与分析">
+          <title>C# Reader · CSV + PID · 04 / 导出与分析 · BlackboxReader</title>
+          <rect x="685" y="356" width="120" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="685" y="356" width="120" height="58" rx="6" class="c-frontend" stroke-width="1.5" fill="#101725" stroke="#94a3b8" />
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(691 362) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2" />
+            <path d="M2 6.5h12" />
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill" fill="#94a3b8" stroke="none" />
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill" fill="#94a3b8" stroke="none" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="736" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">C# Reader</text>
+          <text data-detail="context" x="745" y="393" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">CSV + PID</text>
+        <text data-detail="fine" x="745" y="403" class="t-frontend" font-size="7" text-anchor="middle" fill="#94a3b8">BlackboxReader</text>
+        </g>
+
+        <g id="node-waveform-analysis" data-node-id="waveform-analysis" data-node-label="波形分析" tabindex="0" role="button" aria-label="聚焦波形分析，姿态 / 电机 / 高度, 04 / 导出与分析" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="姿态 / 电机 / 高度" data-node-tag="WaveformForm" data-node-context="04 / 导出与分析">
+          <title>波形分析 · 姿态 / 电机 / 高度 · 04 / 导出与分析 · WaveformForm</title>
+          <rect x="685" y="584" width="120" height="58" rx="6" class="c-mask" fill="#0f172a" />
+          <rect x="685" y="584" width="120" height="58" rx="6" class="c-frontend" stroke-width="1.5" fill="#101725" stroke="#94a3b8" />
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(691 590) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2" />
+            <path d="M2 6.5h12" />
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill" fill="#94a3b8" stroke="none" />
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill" fill="#94a3b8" stroke="none" />
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="739" y="605" class="t-primary" font-size="10" font-weight="600" text-anchor="middle" fill="#ffffff">波形分析</text>
+          <text data-detail="context" x="745" y="621" class="t-muted" font-size="7" text-anchor="middle" fill="#94a3b8">姿态 / 电机 / 高度</text>
+        <text data-detail="fine" x="745" y="631" class="t-frontend" font-size="7" text-anchor="middle" fill="#94a3b8">WaveformForm</text>
+        </g>
+
+        
+        <g data-detail="context" data-edge-from="control-state" data-edge-to="job-queue" data-edge-label="分频后入队" data-edge-key="0" data-edge-id="control-submit">
+          <rect x="96.5" y="194" width="61" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="127" y="205" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">分频后入队</text>
+        <text data-detail="fine" x="127" y="216" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">控制状态</text>
+        </g>
+        <g data-detail="context" data-edge-from="job-queue" data-edge-to="record-builder" data-edge-label="Blackbox_Task 取出 Job" data-edge-key="1" data-edge-id="queue-dequeue">
+          <rect x="255.1" y="255" width="119.8" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="315" y="266" class="t-edge-default" font-size="8" text-anchor="middle" fill="#64748b">Blackbox_Task 取出 Job</text>
+        <text data-detail="fine" x="315" y="277" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">异步消费</text>
+        </g>
+        <g data-detail="context" data-edge-from="record-builder" data-edge-to="w25q64-log" data-edge-label="写入 64 B · 校验 CRC16" data-edge-key="2" data-edge-id="record-write">
+          <rect x="362.6" y="418" width="119.8" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="422.5" y="429" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">写入 64 B · 校验 CRC16</text>
+        <text data-detail="fine" x="422.5" y="440" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">持久化</text>
+        </g>
+        <g data-detail="context" data-edge-from="w25q64-log" data-edge-to="serial-dump" data-edge-label="dump [N] / dumpall [N]" data-edge-key="3" data-edge-id="flash-dump">
+          <rect x="579.6" y="193" width="119.8" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="639.5" y="204" class="t-edge-default" font-size="8" text-anchor="middle" fill="#64748b">dump [N] / dumpall [N]</text>
+        <text data-detail="fine" x="639.5" y="215" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">上锁后读取</text>
+        </g>
+        <g data-detail="context" data-edge-from="serial-dump" data-edge-to="csharp-reader" data-edge-label="串口文本 → 场次文件" data-edge-key="4" data-edge-id="serial-parse">
+          <rect x="692.45" y="225" width="105.1" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="745" y="236" class="t-edge-emphasis" font-size="8" text-anchor="middle" fill="#34d399">串口文本 → 场次文件</text>
+        <text data-detail="fine" x="745" y="247" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">解析分场</text>
+        </g>
+        <g data-detail="context" data-edge-from="csharp-reader" data-edge-to="waveform-analysis" data-edge-label="CSV + PID → 波形" data-edge-key="5" data-edge-id="reader-waveform">
+          <rect x="699.8" y="418" width="90.4" height="27" rx="4" class="c-mask" fill="#0f172a" />
+          <text x="745" y="429" class="t-edge-default" font-size="8" text-anchor="middle" fill="#64748b">CSV + PID → 波形</text>
+        <text data-detail="fine" x="745" y="440" class="t-dim" font-size="7" text-anchor="middle" fill="#cbd5e1">可视分析</text>
+        </g>
+
+        
+        <g data-legend="" data-legend-bridge="">
+          <text x="40" y="664" class="t-primary" font-size="12" font-weight="650" fill="#ffffff">图例</text>
+          <g data-legend-semantic-kind="emphasis" data-legend-x="40" data-legend-baseline="684" data-legend-width="93">
+            <path d="M 40 681 L 74 681" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)" stroke="#34d399" fill="none" />
+            <text x="83" y="684" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">主记录路径</text>
+          </g>
+          <g data-legend-semantic-kind="security" data-legend-x="155" data-legend-baseline="684" data-legend-width="118">
+            <path d="M 155 681 L 189 681" class="a-security" stroke-width="1.4" marker-end="url(#arrowhead-security)" stroke="#fb7185" fill="none" stroke-dasharray="5,5" />
+            <text x="198" y="684" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">校验 / 失败保护</text>
+          </g>
+          <g data-legend-semantic-kind="dashed" data-legend-x="295" data-legend-baseline="684" data-legend-width="98">
+            <path d="M 295 681 L 329 681" class="a-dashed" stroke-width="1.4" marker-end="url(#arrowhead-dashed)" stroke="#a78bfa" fill="none" stroke-dasharray="4,4" />
+            <text x="338" y="684" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">异步 / 分流</text>
+          </g>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="持久化存储" data-legend-x="415" data-legend-baseline="684" data-legend-width="93">
+            <rect x="415" y="676" width="14" height="9" rx="2" class="c-database" stroke-width="1" fill="#21154e" stroke="#a78bfa" />
+            <text x="437" y="684" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">持久化存储</text>
+          </g>
+          <g data-legend-semantic-kind="default" data-legend-x="530" data-legend-baseline="684" data-legend-width="93">
+            <path d="M 530 681 L 564 681" class="a-default" stroke-width="1.4" marker-end="url(#arrowhead)" stroke="#64748b" fill="none" />
+            <text x="573" y="684" class="t-muted" font-size="10" font-weight="500" fill="#94a3b8">普通数据流</text>
+          </g>
+        </g>
+      </svg>
